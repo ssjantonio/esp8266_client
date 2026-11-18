@@ -1,0 +1,6 @@
+node_modules/
+.env
+data/releases.json
+storage/bin/**
+!storage/bin/.gitkeep
+*.log

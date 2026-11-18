@@ -1,0 +1,55 @@
+#pragma once
+#define FIRMWARE_VERSION 259
+#define FORMAT_LITTLEFS_IF_FAILED
+
+#ifndef STASSID
+#define WFSTA 1
+#define WFAP 0
+#define BAUD_RATE 9600
+#define IP_DYNAMIC 0
+#define IP_STATIC 1
+#define USE_TTL 1
+#define STASSID "TU_SSID"
+#define STAPSK "TU_PASSWORD_WIFI"
+#define HOSTNAME "BASC_01_EJEMPLO"
+#define IDENTIFIER "BASC_01_EJEMPLO"
+#define USERTOKEN "1234567890ABCDE"
+#define ADMINTOKEN "ABCDE0123456789"
+#define DECIMAL_PLACES 2
+#define DECIMAL_CHARACTER .
+#define DECIMAL_ASCII 46
+#define EEPROM_SIZE 12
+#endif
+
+struct Config {
+  short firmware_version = 259;
+  short wifi_mode = WFAP;
+  char host_name[16];
+  char identifier[16];
+  char user_token[16];
+  char admin_token[16];
+  short ip_type = IP_DYNAMIC;
+  char ssid[32];
+  char password[24];
+  char ip_address[16];
+  char gateway[16];
+  char subnet[16];
+  char primary_dns[16];
+  char secondary_dns[16];
+  char server_host[32];
+  short server_port = 0;
+  short tcp_client_enabled = 1;
+  short modbus_server_enabled = 1;
+  short modbus_port = 502;
+  float m_value = 1;
+  float b_value = 0;
+  float filter_alpha = 0.01;
+  float umbral_error = 0.1;
+  float d_value = 0.1;
+  float t_value = 4;
+  short uart_time_out = 5;
+  short avg_count = 4;
+  short sensor_type = 0;
+  short sensor_id = 1;
+  short group_id = 1;
+};

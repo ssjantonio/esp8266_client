@@ -1,0 +1,25 @@
+# Build / IDE
+build/
+.vs/
+__vm/
+.theia/
+*.vcxproj*
+*.sln
+*.bin
+*.elf
+*.map
+ar.exe
+tools/
+
+# Secrets — usar Config.h.example como plantilla
+Config.h
+
+# OTA server runtime
+updServer/node_modules/
+updServer/.env
+updServer/data/releases.json
+updServer/storage/bin/**
+!updServer/storage/bin/.gitkeep
+
+# Certs / heavy generated
+data/certs.ar
