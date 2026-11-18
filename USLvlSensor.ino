@@ -25,6 +25,7 @@ extern "C" {
 #include "ConfigJson.h"
 #include "SensorData.h"
 #include "ModbusTcpSlave.h"
+#include "SerialLog.h"
 
 //lowpassfilter
 unsigned char bufferDib[18];
@@ -106,14 +107,14 @@ static void sendTCPDeviceData(void* arg)
     tcpDevice.sensor.crc = crc;
 
 		int bytesAdded = client->add((const char *)tcpDevice.TCPPacket, size);
-    //Serial.printf("\n Added: %d, CRC: %d/%d, Byte13: %d, Byte14: %d", bytesAdded, crc, tcpDevice.sensor.crc, tcpDevice.TCPPacket[size-2], tcpDevice.TCPPacket[size-1]);
+    //Logf("\n Added: %d, CRC: %d/%d, Byte13: %d, Byte14: %d", bytesAdded, crc, tcpDevice.sensor.crc, tcpDevice.TCPPacket[size-2], tcpDevice.TCPPacket[size-1]);
 		client->send();
 	}else
   {
     if(!client->space())
-      Serial.println(F("NO hay espacio disponible en el cliente (sendTCPDeviceData)"));
+      Logln(F("NO hay espacio disponible en el cliente (sendTCPDeviceData)"));
     if(!client->canSend())
-      Serial.println(F("NO esta disponible el cliente (sendTCPDeviceData)"));
+      Logln(F("NO esta disponible el cliente (sendTCPDeviceData)"));
   }
 }
 
@@ -140,14 +141,14 @@ static void sendTCPSensorData(void* arg)
     tcpInfo.sensor.crc = crc;
 
 		int bytesAdded = client->add((const char *)tcpInfo.TCPPacket, size);
-    //Serial.printf("\n Added: %d, CRC: %d/%d, Byte13: %d, Byte14: %d\n", bytesAdded, crc, tcpInfo.sensor.crc, tcpInfo.TCPPacket[size-2], tcpInfo.TCPPacket[size-1]);
+    //Logf("\n Added: %d, CRC: %d/%d, Byte13: %d, Byte14: %d\n", bytesAdded, crc, tcpInfo.sensor.crc, tcpInfo.TCPPacket[size-2], tcpInfo.TCPPacket[size-1]);
 		client->send();
 	}else
   {
     if(!client->space())
-      Serial.println(F("NO hay espacio disponible en el cliente (sendTCPSensorData)"));
+      Logln(F("NO hay espacio disponible en el cliente (sendTCPSensorData)"));
     if(!client->canSend())
-      Serial.println(F("NO esta disponible el cliente (sendTCPSensorData)"));
+      Logln(F("NO esta disponible el cliente (sendTCPSensorData)"));
   }
 }
 
@@ -169,12 +170,12 @@ static void handleData(void* arg, AsyncClient* client, void *data, size_t len)
     {
       sendTCPDeviceData(client);
     }
-    //Serial.printf("\n data received from %s, command: %d \n", client->remoteIP().toString().c_str(),req.data.command);
+    //Logf("\n data received from %s, command: %d \n", client->remoteIP().toString().c_str(),req.data.command);
     //Serial.write((uint8_t*)data, len);
 
   }else
   {
-    Serial.println("La longitud no es correcta");
+    Logln("La longitud no es correcta");
   }
   _isConnecting = false;
   _lastTCPAlive = millis();
@@ -184,7 +185,7 @@ void onConnect(void* arg, AsyncClient* client)
 {
   _lastTCPAlive = millis();
   _wasConnected = true;
-	Serial.printf("\n client has been connected to %s on port %d \n", config.server_host, config.server_port);
+	Logf("\n client has been connected to %s on port %d \n", config.server_host, config.server_port);
   sendTCPDeviceData(client);
 }
 
@@ -193,7 +194,7 @@ unsigned long intervalConnectTcp = 2000;
 
 void onDisconnect(void* arg, AsyncClient* client) 
 {
-	//Serial.printf("\n client has been disconnected from %s on port %d \n", config.server_host, config.server_port);
+	//Logf("\n client has been disconnected from %s on port %d \n", config.server_host, config.server_port);
   _isConnecting = false;
 }
 
@@ -229,7 +230,7 @@ void tcpConnect()
     AsyncClient* client = &_tcpClient;
     if(config.tcp_client_enabled && config.server_port > 0 && WiFi.status() == WL_CONNECTED && !client->connected() && !client->connecting() && !_isConnecting)
     {
-      //Serial.printf("\n connect to tcp://%s:%d", config.server_host, config.server_port);
+      //Logf("\n connect to tcp://%s:%d", config.server_host, config.server_port);
       _isConnecting = client->connect(config.server_host, config.server_port);
     }
   }
@@ -238,7 +239,7 @@ void tcpConnect()
 bool loadConfigFile(const char *filename, Config &config) {
   File file = LittleFS.open(filename, "r");
   if (!file) {
-    Serial.println(F("Failed to open config file"));
+    Logln(F("Failed to open config file"));
     last_error_code = 10404;
     return false;
   }
@@ -246,8 +247,8 @@ bool loadConfigFile(const char *filename, Config &config) {
   DeserializationError err = deserializeJson(doc, file);
 
   if (err) {
-    Serial.println(F("Failed to deserialize configuration: "));
-    Serial.println(err.f_str());
+    Logln(F("Failed to deserialize configuration: "));
+    Logln(err.f_str());
     last_error_code = 10405;
     return false;
   }
@@ -263,7 +264,7 @@ void saveConfigFile(const char *filename, const Config &config) {
   // Open file for writing
   File file = LittleFS.open(filename, "w");
   if (!file) {
-    Serial.println(F("Failed to create config file"));
+    Logln(F("Failed to create config file"));
     last_error_code = 10400;
     return;
   }
@@ -275,9 +276,41 @@ void saveConfigFile(const char *filename, const Config &config) {
   bool success = serializeJsonPretty(doc, file) > 0;
   if (!success) {
     last_error_code = 10401;
-    Serial.println(F("Failed to serialize configuration"));
+    Logln(F("Failed to serialize configuration"));
   }
 }
+
+#ifdef ASYNC_WEBSERVER
+static bool wantsJson(AsyncWebServerRequest *request)
+{
+  // Explícito por query: siempre JSON
+  if (request->hasArg("format") && request->arg("format").equalsIgnoreCase("json"))
+    return true;
+
+  // Solo si Accept es exclusivamente application/json (opcional ;charset=... o q=...)
+  // Si viene text/html u otros tipos (navegador), se responde como antes.
+  if (!request->hasHeader("Accept"))
+    return false;
+
+  String accept = request->header("Accept");
+  accept.trim();
+  accept.toLowerCase();
+  if (accept.length() == 0 || accept == F("*/*"))
+    return false;
+
+  // Rechazar si hay más de un tipo (coma) o si no empieza por application/json
+  if (accept.indexOf(',') >= 0)
+    return false;
+  if (!accept.startsWith(F("application/json")))
+    return false;
+
+  // application/json o application/json;...
+  if (accept.length() > 16 && accept.charAt(16) != ';')
+    return false;
+
+  return true;
+}
+#endif
 
 #ifndef ASYNC_WEBSERVER
 void handleRoot()
@@ -285,15 +318,51 @@ void handleRoot()
 void handleRoot(AsyncWebServerRequest *request)
 #endif
 {
-  Serial.println(F("Request home\n"));
+  Logln(F("Request home\n"));
   int sec = millis() / 1000;
   int min = sec / 60;
   int hr = min / 60;
   String sensor_type = "UNKNOWN";
-  //String wifi_status = "UNKNOWN";
+
+  if(config.sensor_type == 0)
+    sensor_type = F("US LEVEL A02YYUW");
+  else if(config.sensor_type == 1)
+    sensor_type = F("I-QY WEIGHT INDICATOR");
+  else if(config.sensor_type == 2)
+    sensor_type = F("DIBATEC LUMINA");
+
+#ifdef ASYNC_WEBSERVER
+  if (wantsJson(request))
+  {
+    JsonDocument doc;
+    doc["firmware_version"] = config.firmware_version;
+    doc["host_name"] = config.host_name;
+    doc["identifier"] = config.identifier;
+    doc["sensor_type"] = config.sensor_type;
+    doc["sensor_type_name"] = sensor_type;
+    doc["client_ip"] = _wifiIp;
+    doc["server_host"] = config.server_host;
+    doc["server_port"] = config.server_port;
+    doc["wifi_rssi"] = WiFi.RSSI();
+    doc["present_value"] = present_value;
+    doc["uart_error"] = distancia_error;
+    doc["uptime_sec"] = sec;
+    doc["tcp_client_enabled"] = config.tcp_client_enabled;
+    doc["modbus_server_enabled"] = config.modbus_server_enabled;
+    doc["modbus_port"] = config.modbus_port;
+    doc["ota_version"] = TRUC_VERSION;
+    String jsonString;
+    if (serializeJson(doc, jsonString) == 0)
+      request->send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
+    else
+      request->send(200, "application/json", jsonString);
+    return;
+  }
+#endif
+
   StreamString temp;
   if(!temp.reserve(1800)){
-    Serial.println("No memory");
+    Logln("No memory");
     #ifndef ASYNC_WEBSERVER
     server.send(200, "text/html", "NO MEMORY!");
     #else
@@ -301,11 +370,6 @@ void handleRoot(AsyncWebServerRequest *request)
     #endif
     return;
   }  // Preallocate a large chunk to avoid memory fragmentation
-
-  if(config.sensor_type == 0)
-    sensor_type = F("US LEVEL A02YYUW");
-  else if(config.sensor_type == 1)
-    sensor_type = F("I-QY WEIGHT INDICATOR");
   
   temp.printf("\
 <html>\
@@ -416,7 +480,7 @@ void receiveConfig(AsyncWebServerRequest *request, JsonVariant &json)
   DeserializationError err = deserializeJson(doc, jsonString);
   if (err) {
     server.send(500, "application/json", F("{ \"result\"=\"Failed to deserialize configuration\"}"));
-    Serial.println(err.f_str());
+    Logln(err.f_str());
   }else{
     config = doc.as<Config>();
     config.firmware_version = FIRMWARE_VERSION; //este no se puede modificar!
@@ -444,7 +508,7 @@ void receiveConfig(AsyncWebServerRequest *request, JsonVariant &json)
 
 void resetConfig()
 {
-  Serial.println(F("Using default config"));
+  Logln(F("Using default config"));
   config.firmware_version = FIRMWARE_VERSION;
   config.wifi_mode = WFAP;
   strcpy(config.host_name, HOSTNAME);
@@ -496,18 +560,17 @@ void checkWifiStatus()
   if (currentMillis - previousMillis >=interval){
     switch (WiFi.status()){
       case WL_NO_SSID_AVAIL:
-        Serial.println(F("Configured SSID cannot be reached"));
+        Logln(F("Configured SSID cannot be reached"));
         break;
       case WL_CONNECTED:
-        Serial.println(F("Connection successfully established"));
+        Logln(F("Connection successfully established"));
         break;
       case WL_CONNECT_FAILED:
-        Serial.println(F("Connection failed"));
+        Logln(F("Connection failed"));
         break;
     }
-    Serial.printf("Connection status: %d\n", WiFi.status());
-    Serial.print(F("RRSI: "));
-    Serial.println(WiFi.RSSI());
+    Logf("Connection status: %d\n", WiFi.status());
+    Logf("RRSI: %d\n", WiFi.RSSI());
     previousMillis = currentMillis;
 
     if(WiFi.status() != WL_CONNECTED && !_reconnecting)
@@ -522,7 +585,7 @@ void reconnectWifi()
   if(_hasSuccessfulConnection && currentMillis - previousReconnectMillis >= intervalReconnect) 
   {
     _reconnecting = true;
-    Serial.println("Reconnecting to wifi");
+    Logln("Reconnecting to wifi");
     connectWifi();
     previousReconnectMillis = millis();
     
@@ -538,7 +601,7 @@ void reconnectWifi()
 
 void connectWifi()
 {
-  Serial.println(F("\nConnecting to wifi..."));
+  Logln(F("\nConnecting to wifi..."));
   if(config.wifi_mode == WFSTA && _restartCount<3)
   {
       WiFi.mode(WIFI_STA);
@@ -546,7 +609,7 @@ void connectWifi()
       if(config.ip_type == IP_STATIC)
       {
         //Establecer manualmente la IP
-        Serial.println(F("Setting Static IP."));
+        Logln(F("Setting Static IP."));
 
         local_ip.fromString(config.ip_address);
         gateway.fromString(config.gateway);
@@ -570,7 +633,7 @@ void connectWifi()
         halfSecondsTried++;
         if(halfSecondsTried/2 > 30)
         {
-          Serial.println(F("Can't connect to the SSID, you can reset 3 times to connect as AP and configure in http://192.168.4.1/config"));
+          Logln(F("Can't connect to the SSID, you can reset 3 times to connect as AP and configure in http://192.168.4.1/config"));
           digitalWrite(LED_BUILTIN, HIGH); //DEJAR EL LED ENCENDIDO
           break;
         }
@@ -579,7 +642,7 @@ void connectWifi()
       WiFi.hostname(config.host_name);
       if (MDNS.begin(config.host_name)) {
         _hasSuccessfulConnection = true;
-        Serial.println(F("MDNS responder started"));
+        Logln(F("MDNS responder started"));
         if (config.modbus_server_enabled) {
           uint16_t mbPort = config.modbus_port > 0 ? (uint16_t)config.modbus_port : 502;
           MDNS.addService("uslvl", "tcp", mbPort);
@@ -591,11 +654,8 @@ void connectWifi()
         last_error_code = 1000;
       }
       
-      Serial.println("");
-      Serial.print("Connected to ");
-      Serial.println(config.identifier);
-      Serial.print("IP address: ");
-      Serial.println(WiFi.localIP());
+      Logf("Connected to %s\n", config.identifier);
+      Logf("IP address: %s\n", WiFi.localIP().toString().c_str());
       //_wifiIp = WiFi.localIP().toString().c_str();
       memcpy(_wifiIp, WiFi.localIP().toString().c_str(), 15);
       setRestartCount(0);
@@ -606,10 +666,8 @@ void connectWifi()
       WiFi.softAP(config.identifier);
 
       IPAddress myIP = WiFi.softAPIP();
-      Serial.print("AP IP address: ");
-      Serial.println(myIP);
-      Serial.print("Default AP: ");
-      Serial.println(config.identifier);
+      Logf("AP IP address: %s\n", myIP.toString().c_str());
+      Logf("Default AP: %s\n", config.identifier);
 
       setRestartCount(0);
   }
@@ -640,7 +698,7 @@ void setup(void) {
 
   if (!LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED)) {
     last_error_code = 10300;
-    Serial.println(F("Failed to mount LittleFS. Please format the partition."));
+    Logln(F("Failed to mount LittleFS. Please format the partition."));
   }
 
   bool loaded = loadConfigFile(config_filename, config);
@@ -652,7 +710,7 @@ void setup(void) {
   if(config.filter_alpha > 0.99 || config.filter_alpha <0)
     config.filter_alpha = 0; //Desactivar el filtro lowpass
 
-  Serial.printf("\nRestart count: %d\n", _restartCount);
+  Logf("\nRestart count: %d\n", _restartCount);
   connectWifi();
 
   server.on("/", HTTP_GET, handleRoot);
@@ -676,19 +734,34 @@ void setup(void) {
   #endif
 
 server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
-    Serial.println(F("Request home\n"));
-  int sec = millis() / 1000;
-  int min = sec / 60;
-  int hr = min / 60;
-  String sensor_type = "UNKNOWN";
-  //String wifi_status = "UNKNOWN";
+  if (wantsJson(request))
+  {
+    JsonDocument doc;
+    doc["host_name"] = config.host_name;
+    doc["identifier"] = config.identifier;
+    doc["wifi_mode"] = config.wifi_mode;
+    doc["ssid"] = config.ssid;
+    doc["server_host"] = config.server_host;
+    doc["server_port"] = config.server_port;
+    doc["sensor_type"] = config.sensor_type;
+    doc["umbral_error"] = config.umbral_error;
+    doc["tcp_client_enabled"] = config.tcp_client_enabled;
+    doc["modbus_server_enabled"] = config.modbus_server_enabled;
+    doc["modbus_port"] = config.modbus_port;
+    String jsonString;
+    serializeJson(doc, jsonString);
+    request->send(200, "application/json", jsonString);
+    return;
+  }
+
+  Logln(F("Request set-config\n"));
   StreamString temp;
   if(!temp.reserve(1800)){
-    Serial.println("No memory");
+    Logln("No memory");
     request->send(200, "text/html", "NO MEMORY!");
-  } 
+    return;
+  }
 
-  
   temp.printf("\
 <html>\
   <head>\
@@ -847,28 +920,58 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
 
   server.on("/ver", [](AsyncWebServerRequest *request)
   {
-    request->send(200, "text/plain",  TRUC_VERSION);
+    if (wantsJson(request))
+    {
+      JsonDocument doc;
+      doc["version"] = TRUC_VERSION;
+      doc["firmware_version"] = FIRMWARE_VERSION;
+      doc["spiffs_version"] = SPIFFS_VERSION;
+      String jsonString;
+      serializeJson(doc, jsonString);
+      request->send(200, "application/json", jsonString);
+    }
+    else
+      request->send(200, "text/plain", TRUC_VERSION);
+  });
+
+  server.on("/log", HTTP_GET, [](AsyncWebServerRequest *request)
+  {
+    if (wantsJson(request))
+    {
+      request->send(200, "application/json", serialLogJson());
+      return;
+    }
+
+    String body;
+    body.reserve(1400);
+    body += F("<!DOCTYPE html><html><head><meta charset=\"utf-8\">");
+    body += F("<meta http-equiv=\"refresh\" content=\"3\">");
+    body += F("<title>Serial log</title>");
+    body += F("<style>body{font-family:monospace;background:#111;color:#0f0;padding:12px}");
+    body += F("pre{white-space:pre-wrap}</style></head><body>");
+    body += F("<h3>Últimas líneas</h3><pre>");
+    body += serialLogText();
+    body += F("</pre><p><a href=\"/log\">refresh</a> · <a href=\"/log?format=json\">json</a></p></body></html>");
+    request->send(200, "text/html; charset=utf-8", body);
   });
 
   server.on("/update", [](AsyncWebServerRequest *request)
   {
-    
-   
     if(_last_update_result != HTTP_UPDATE_OK)
     {
-      StreamString json;
-      if(!json.reserve(1800)){
-        Serial.println("No memory");
-        request->send(200, "text/html", "NO MEMORY!");
-        return;
-      } 
+      JsonDocument doc;
+      doc["result"] = "HTTP_UPDATE_FAILED";
+      doc["error"] = ESPhttpUpdate.getLastError();
+      doc["error_string"] = ESPhttpUpdate.getLastErrorString();
       _last_update_result = HTTP_UPDATE_OK;
-      json.printf("{ \"result\"=\"HTTP_UPDATE_FAILED Error (%d): %s\"}", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str()); 
-      request->send(302, "application/json",  json.c_str());
-      
-    }else{
+      String jsonString;
+      serializeJson(doc, jsonString);
+      request->send(200, "application/json", jsonString);
+    }
+    else
+    {
       _enable_update = true;
-      request->send(200, "application/json",  F("{ \"result\"=\"OK updating...\"}"));
+      request->send(200, "application/json", F("{\"result\":\"OK updating...\"}"));
     }
   });
 #ifndef ASYNC_WEBSERVER
@@ -938,7 +1041,7 @@ void startModbus()
   uint16_t mbPort = config.modbus_port > 0 ? (uint16_t)config.modbus_port : 502;
   modbusSlave.begin(mbPort);
   seedModbusMap();
-  Serial.printf("Modbus TCP slave on :%u (holding 0..%d)\n", mbPort, MODBUS_HOLDING_COUNT - 1);
+  Logf("Modbus TCP slave on :%u (holding 0..%d)\n", mbPort, MODBUS_HOLDING_COUNT - 1);
 }
 
 void pauseNetForUpdate()
@@ -957,7 +1060,7 @@ void pauseNetForUpdate()
     delay(10);
     yield();
   }
-  Serial.printf("Heap antes de OTA: %u\n", ESP.getFreeHeap());
+  Logf("Heap antes de OTA: %u\n", ESP.getFreeHeap());
 }
 
 void resumeNetAfterUpdate()
@@ -1090,7 +1193,7 @@ void parseBuffer(int len)
   if(isNeg) //Si es negativo
     present_value = -1*present_value;
 
-    Serial.printf("Peso: %.2f", present_value);
+    Logf("Peso: %.2f", present_value);
 }
 
 
@@ -1322,7 +1425,7 @@ void loop(void)
     _enable_update = false;
     _didFirstOtaCheck = true;
     _last_updated = millis();
-    Serial.printf("OTA %s -> %s\n", TRUC_VERSION, updateUrl);
+    Logf("OTA %s -> %s\n", TRUC_VERSION, updateUrl);
     pauseNetForUpdate();
     _last_update_result = actualUpdate(true);
     if (_last_update_result == HTTP_UPDATE_OK)
@@ -1337,7 +1440,7 @@ void loop(void)
   // No corre si acabamos de consultar OTA (resumeNetAfterUpdate refresca el contador).
   if(config.tcp_client_enabled && config.server_port > 0 && (millis() - _lastTCPAlive) > 300000 && WiFi.status() == WL_CONNECTED )
   { 
-    Serial.printf("Restart ESP %d - %d", millis(), _lastTCPAlive);
+    Logf("Restart ESP %d - %d", millis(), _lastTCPAlive);
     ESP.reset();
   }
 }

@@ -1,6 +1,7 @@
 #pragma once 
 #define AUTO_UPDATE_H
 #include <ESP8266httpUpdate.h>
+#include "SerialLog.h"
 
 // Tiene que ser exactamente la versión con la que se sube el .bin en /arduino-upload.
 // Si el texto de aquí es menor que el registro del servidor, el equipo se reprograma en bucle.
@@ -18,7 +19,7 @@ t_httpUpdate_return actualUpdate(bool sketch=false){
 
     ESPhttpUpdate.rebootOnUpdate(false);
 
-    Serial.printf("Find updates on %s\n", updateUrl);
+    Logf("Find updates on %s\n", updateUrl);
 
     if(sketch){
       return ESPhttpUpdate.update(client, updateUrl, TRUC_VERSION);     // **************** This is the line that "does the business"   
