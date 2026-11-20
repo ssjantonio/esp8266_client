@@ -1,6 +1,7 @@
 #pragma once
-#define FIRMWARE_VERSION 259
-#define FORMAT_LITTLEFS_IF_FAILED
+/* Contador interno de build/protocolo (Modbus h3, TCP). No es 1.1.0 semver; sube +1 por release. ≥259 = map v2. */
+#define FIRMWARE_VERSION 260
+/* Obsoleto: el sketch usa LittleFSConfig + format explícito en mountLittleFs() */
 
 #ifndef STASSID
 #define WFSTA 1
@@ -11,6 +12,10 @@
 #define USE_TTL 1
 #define STASSID "TU_SSID"
 #define STAPSK "TU_PASSWORD_WIFI"
+/* Placeholder: si identifier sigue igual tras resetConfig, se sustituye por HQ_IOT_<chipId> en primer arranque. */
+#define ID_PREFIX "HQ_IOT_"
+/* Contraseña POST /ap-mode y PSK del AP (WPA2: si tiene <8 chars se usa psk+\"00\"). */
+#define AP_PROVISIONING_PASSWORD "16794300"
 #define HOSTNAME "BASC_01_EJEMPLO"
 #define IDENTIFIER "BASC_01_EJEMPLO"
 #define USERTOKEN "1234567890ABCDE"
@@ -19,10 +24,20 @@
 #define DECIMAL_CHARACTER .
 #define DECIMAL_ASCII 46
 #define EEPROM_SIZE 12
+/* Ciclo WiFi en modo Station: intentos STA → AP recuperación → STA */
+#ifndef WIFI_STA_CONNECT_ATTEMPTS
+#define WIFI_STA_CONNECT_ATTEMPTS 5
+#endif
+#ifndef WIFI_STA_ATTEMPT_TIMEOUT_SEC
+#define WIFI_STA_ATTEMPT_TIMEOUT_SEC 12
+#endif
+#ifndef WIFI_AP_RECOVERY_MS
+#define WIFI_AP_RECOVERY_MS 60000UL
+#endif
 #endif
 
 struct Config {
-  short firmware_version = 259;
+  short firmware_version = 260;
   short wifi_mode = WFAP;
   char host_name[16];
   char identifier[16];

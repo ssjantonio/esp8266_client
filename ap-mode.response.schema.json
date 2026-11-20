@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hq.instrumentation/schemas/uslvl/ap-mode.response.schema.json",
+  "title": "USLvlSensor POST /ap-mode (response)",
+  "description": "Tras éxito reinicia en restart_in_ms. Conectar al ap_ssid con ap_password.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "result": { "type": "string", "const": "Ok" },
+    "wifi_mode": { "type": "integer", "const": 0 },
+    "identifier": { "type": "string", "maxLength": 15 },
+    "ap_ssid": { "type": "string", "maxLength": 15 },
+    "ap_password": { "type": "string", "minLength": 8, "maxLength": 15 },
+    "ap_ip": { "type": "string", "const": "192.168.4.1" },
+    "restart_in_ms": { "type": "integer", "const": 3000 }
+  },
+  "required": ["result", "wifi_mode", "identifier", "ap_ssid", "ap_password", "ap_ip", "restart_in_ms"]
+}

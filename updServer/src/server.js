@@ -3,7 +3,7 @@ const path = require('path');
 const express = require('express');
 const basicAuth = require('express-basic-auth');
 const { ensureDataFile } = require('./lib/releases');
-const { createUpdateRouter } = require('./routes/updateEsp8266');
+const { createUpdateRouter } = require('./routes/updateFirmware');
 const { createUploadRouter } = require('./routes/uploadEsp8266');
 
 const PORT = parseInt(process.env.PORT || '3010', 10);
@@ -35,9 +35,14 @@ const authMiddleware = useAppAuth
     })
   : (_req, _res, next) => next();
 
+const updateOpts = { dataDir, appRoot, log };
 app.use(
   '/update/esp8266',
-  createUpdateRouter({ dataDir, appRoot, log })
+  createUpdateRouter({ ...updateOpts, platform: 'esp8266' })
+);
+app.use(
+  '/update/esp32',
+  createUpdateRouter({ ...updateOpts, platform: 'esp32' })
 );
 app.use(
   '/upload-esp8266',

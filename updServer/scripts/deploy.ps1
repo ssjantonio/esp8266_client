@@ -13,6 +13,7 @@ $items = @(
   "updServer",
   "USLvlSensor.ino",
   "AutoUpdate.h",
+  "OtaFsLayout.h",
   "ConfigJson.cpp",
   "ConfigJson.h",
   "SensorData.cpp",

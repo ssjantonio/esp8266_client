@@ -7,6 +7,8 @@
 #endif
 #include <ESP8266mDNS.h>
 #include <LittleFS.h>
+#include <flash_hal.h>
+#include "OtaFsLayout.h"
 #include <stdio.h>
 #include <EEPROM.h>
 #include <ESPAsyncTCP.h>
@@ -26,6 +28,8 @@ extern "C" {
 #include "SensorData.h"
 #include "ModbusTcpSlave.h"
 #include "SerialLog.h"
+#include "FactoryIdentity.h"
+#include "Provisioning.h"
 
 //lowpassfilter
 unsigned char bufferDib[18];
@@ -53,8 +57,46 @@ bool _enable_update = false;
 t_httpUpdate_return _last_update_result = HTTP_UPDATE_OK;
 
 Config config;  //archivo de configuración
-const bool formatLittleFsOnFailure = true; //Formatear automaticamente el sistema de archivos en caso de falla
 const char *config_filename = "/config.json"; //archivo de configuración
+static bool g_littleFsOk = false;
+
+static bool mountLittleFs()
+{
+  if (FS_PHYS_SIZE == 0) {
+    g_littleFsOk = false;
+    last_error_code = 10300;
+    Serial.println(
+      "LittleFS: particion FS=0 en este build. IDE: Flash size con FS "
+      "(p. ej. 1MB FS:64KB), no FS:none.");
+    Logln(F("Failed to mount LittleFS. Please format the partition."));
+    return false;
+  }
+
+  LittleFSConfig cfg(true);
+  LittleFS.setConfig(cfg);
+  if (LittleFS.begin()) {
+    g_littleFsOk = true;
+    FSInfo info;
+    if (LittleFS.info(info))
+      Serial.printf("LittleFS OK: %u / %u bytes\n", info.usedBytes, info.totalBytes);
+    return true;
+  }
+
+  Serial.println(F("LittleFS: montaje falló, formateando..."));
+  if (LittleFS.format() && LittleFS.begin()) {
+    g_littleFsOk = true;
+    Serial.println(F("LittleFS OK tras format"));
+    return true;
+  }
+
+  g_littleFsOk = false;
+  last_error_code = 10300;
+  Serial.printf(
+    "LittleFS no disponible. Flash IDE=%u real=%u — revisa Tools>Flash size\n",
+    ESP.getFlashChipSize(), ESP.getFlashChipRealSize());
+  Logln(F("Failed to mount LittleFS. Please format the partition."));
+  return false;
+}
 
 unsigned char data[4] = {};  //Datos del lector US
 //unsigned char data16[16] = {};  //Datos del lector US
@@ -261,6 +303,11 @@ bool loadConfigFile(const char *filename, Config &config) {
 
 // Saves the configuration to a file
 void saveConfigFile(const char *filename, const Config &config) {
+  if (!g_littleFsOk) {
+    Logln(F("Failed to create config file"));
+    last_error_code = 10400;
+    return;
+  }
   // Open file for writing
   File file = LittleFS.open(filename, "w");
   if (!file) {
@@ -312,27 +359,80 @@ static bool wantsJson(AsyncWebServerRequest *request)
 }
 #endif
 
+static const char *sensorTypeName()
+{
+  if (config.sensor_type == 0) return "US LEVEL A02YYUW";
+  if (config.sensor_type == 1) return "I-QY WEIGHT INDICATOR";
+  if (config.sensor_type == 2) return "DIBATEC LUMINA";
+  return "UNKNOWN";
+}
+
+static void appendHqCss(String &html)
+{
+  html += F(
+    "<style>"
+    "*,*::before,*::after{box-sizing:border-box}"
+    "body{margin:0;font:15px/1.45 system-ui,-apple-system,sans-serif;background:#0f1419;color:#e7eef7}"
+    ".w{max-width:480px;margin:20px auto;padding:0 12px 28px}"
+    ".c{background:#1a2332;border-radius:14px;padding:20px 18px;box-shadow:0 10px 28px #0008}"
+    "h1{font-size:1.25rem;margin:0 0 4px}p.s{margin:0 0 12px;color:#8b9bb4;font-size:.9rem}"
+  ".h{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:#6b7a90;margin:20px 0 10px;"
+  "padding-bottom:6px;border-bottom:1px solid #ffffff14}"
+    ".r{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #ffffff12}"
+    ".k{color:#8b9bb4}.v{font-weight:600;text-align:right}"
+    "label{display:block;margin:0 0 6px;color:#9aabc2;font-size:.84rem}"
+    "input:not([type=checkbox]),select,button{display:block;width:100%;max-width:100%;margin:0 0 12px;"
+    "padding:10px 12px;border-radius:8px;border:1px solid #3a4a5e;background:#121a24;color:#e7eef7;font:inherit}"
+    "select{-webkit-appearance:none;appearance:none}"
+    "select{background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath fill='%239aabc2' d='M1 1l5 5 5-5'/%3E%3C/svg%3E\");"
+    "background-repeat:no-repeat;background-position:right 12px center;padding-right:36px}"
+    "input[type=number]{-moz-appearance:textfield}"
+    ".tog{display:flex;align-items:center;gap:12px;margin:0 0 14px;padding:12px;border-radius:10px;"
+    "background:#121a24;border:1px solid #3a4a5e}"
+    ".tog input{width:20px;height:20px;margin:0;flex:0 0 auto;accent-color:#3d9cf0}"
+    ".tog label{margin:0;flex:1;font-size:.95rem;color:#e7eef7}"
+    "button{background:#3d9cf0;border:0;font-weight:600;margin:8px 0 0;cursor:pointer}"
+    ".n{margin-top:18px;display:flex;gap:14px;flex-wrap:wrap}.n a{color:#3d9cf0;text-decoration:none}"
+    ".ok{color:#3ecf8e}"
+    "</style>");
+}
+
+static void appendToggle(String &html, const char *fieldId, const char *fieldName, const char *label, bool on)
+{
+  html += F("<div class=tog><input type=checkbox name=");
+  html += fieldName;
+  html += F(" value=1 id=");
+  html += fieldId;
+  if (on)
+    html += F(" checked");
+  html += F("><label for=");
+  html += fieldId;
+  html += F(">");
+  html += label;
+  html += F("</label></div>");
+}
+
+static void appendHqRow(String &html, const __FlashStringHelper *k, const String &v)
+{
+  html += F("<div class=r><span class=k>");
+  html += k;
+  html += F("</span><span class=v>");
+  html += v;
+  html += F("</span></div>");
+}
+
 #ifndef ASYNC_WEBSERVER
 void handleRoot()
 #else
 void handleRoot(AsyncWebServerRequest *request)
 #endif
 {
-  Logln(F("Request home\n"));
-  int sec = millis() / 1000;
-  int min = sec / 60;
-  int hr = min / 60;
-  String sensor_type = "UNKNOWN";
-
-  if(config.sensor_type == 0)
-    sensor_type = F("US LEVEL A02YYUW");
-  else if(config.sensor_type == 1)
-    sensor_type = F("I-QY WEIGHT INDICATOR");
-  else if(config.sensor_type == 2)
-    sensor_type = F("DIBATEC LUMINA");
+  const char *sensor_type = sensorTypeName();
+  unsigned long sec = millis() / 1000;
 
 #ifdef ASYNC_WEBSERVER
   if (wantsJson(request))
+#endif
   {
     JsonDocument doc;
     doc["firmware_version"] = config.firmware_version;
@@ -351,59 +451,63 @@ void handleRoot(AsyncWebServerRequest *request)
     doc["modbus_server_enabled"] = config.modbus_server_enabled;
     doc["modbus_port"] = config.modbus_port;
     doc["ota_version"] = TRUC_VERSION;
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["free_sketch"] = ESP.getFreeSketchSpace();
     String jsonString;
     if (serializeJson(doc, jsonString) == 0)
-      request->send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
-    else
-      request->send(200, "application/json", jsonString);
-    return;
-  }
-#endif
-
-  StreamString temp;
-  if(!temp.reserve(1800)){
-    Logln("No memory");
-    #ifndef ASYNC_WEBSERVER
-    server.send(200, "text/html", "NO MEMORY!");
-    #else
-    request->send(200, "text/html", "NO MEMORY!");
-    #endif
-    return;
-  }  // Preallocate a large chunk to avoid memory fragmentation
-  
-  temp.printf("\
-<html>\
-  <head>\
-    <meta http-equiv='refresh' content='5'/>\
-    <title>Hidraquim SA de CV - IOT</title>\
-    <style>\
-      body { background-color: #cccccc; font-family: Arial, Helvetica, Sans-Serif; Color: #000088; }\
-    </style>\
-  </head>\
-  <body>\
-    <h1>Modulo transmisor TCP interfaz UART TTL - AsyncWebserver</h1>\
-    <p><strong>VERSION:</strong> %d</p>\
-    <p><strong>HOST NAME:</strong> %s</p>\
-    <p><strong>IDENTIFIER:</strong> %s</p>\
-    <p><strong>SENSOR TYPE:</strong> %s</p>\
-    <p><strong>CLIENT IP:</strong> %s</p>\
-    <p><strong>SERVER HOST:</strong> %s:%d</p>\
-    <p><strong>WIFI STRENGTH:</strong> %d</p>\
-    <p><strong>PRESENT VALUE:</strong> %.2f</p>\
-    <p><strong>UART ERROR:</strong> %d</p>\
-    <p><strong>Uptime:</strong> %02d:%02d:%02d</p>\
-    <form method=\"post\" action=\"/set-ssid\">\
-    <p><label>SSID: </label><input name=\"ssid\" value=\"%s\"></input></p>\
-    <p><label>SSID: </label><input name=\"pwd\" value=\"\"></input></p>\
-    <p><button>Save</button></p></form>\
-  </body>\
-</html>", config.firmware_version, config.host_name, config.identifier, sensor_type.c_str(), _wifiIp,config.server_host, config.server_port, WiFi.RSSI(), present_value, distancia_error, hr, min % 60, sec % 60, config.ssid);
+    {
 #ifndef ASYNC_WEBSERVER
-  server.send(200, "text/html", temp.c_str());
-#else  
-  request->send(200, "text/html", temp.c_str());
-#endif  
-  
+      server.send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
+#else
+      request->send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
+#endif
+    }
+    else
+    {
+#ifndef ASYNC_WEBSERVER
+      server.send(200, "application/json", jsonString);
+#else
+      request->send(200, "application/json", jsonString);
+#endif
+    }
+#ifdef ASYNC_WEBSERVER
+    return;
+#endif
+  }
+
+#ifdef ASYNC_WEBSERVER
+  String html;
+  html.reserve(1600);
+  html += F("<!doctype html><html><head><meta charset=utf-8>");
+  html += F("<meta name=viewport content=\"width=device-width,initial-scale=1\">");
+  html += F("<meta http-equiv=refresh content=30><title>");
+  html += config.identifier;
+  html += F("</title>");
+  appendHqCss(html);
+  html += F("</head><body><div class=w><div class=c>");
+  html += F("<h1>Hidraquim IoT</h1><p class=s>");
+  html += config.host_name;
+  html += F(" · ");
+  html += TRUC_VERSION;
+  html += F("</p>");
+
+  appendHqRow(html, F("Identifier"), String(config.identifier));
+  appendHqRow(html, F("Sensor"), String(sensor_type));
+  appendHqRow(html, F("Value"), String(present_value, 2));
+  appendHqRow(html, F("UART error"), String(distancia_error));
+  appendHqRow(html, F("IP"), String(_wifiIp));
+  appendHqRow(html, F("TCP server"), String(config.server_host) + ":" + String(config.server_port));
+  appendHqRow(html, F("WiFi RSSI"), String(WiFi.RSSI()) + " dBm");
+  appendHqRow(html, F("Modbus"),
+    config.modbus_server_enabled ? ("on :" + String(config.modbus_port)) : String("off"));
+  appendHqRow(html, F("Uptime"), String(sec / 3600) + "h " + String((sec / 60) % 60) + "m");
+  appendHqRow(html, F("Free OTA"), String(ESP.getFreeSketchSpace() / 1024) + " KB");
+
+  html += F("<div class=n><a href=/set-config>Config</a><a href=/map>Map</a>");
+  html += F("<a href=/log?format=json>Log</a><a href=/?format=json>JSON</a></div>");
+  html += F("</div></div></body></html>");
+  request->send(200, "text/html; charset=utf-8", html);
+#endif
 }
 
 #ifndef ASYNC_WEBSERVER
@@ -441,6 +545,8 @@ void setupESPSerial() {
     Serial.begin(BAUD_RATE, SERIAL_8N1);
   else
     Serial.begin(115200);
+  // readBytes() por defecto espera 1 s y congela el loop si la trama viene corta.
+  Serial.setTimeout(50);
 }
 
 #ifndef ASYNC_WEBSERVER
@@ -452,21 +558,20 @@ void sendConfig(AsyncWebServerRequest *request)
   JsonDocument doc;
   doc.set(config);
   String jsonString;
-  bool success = serializeJsonPretty(doc, jsonString) > 0;
+  bool success = serializeJson(doc, jsonString) > 0;
   if (!success) {
     #ifndef ASYNC_WEBSERVER
-    server.send(500, "application/json", F("{ \"result\"=\"Failed to serialize configuration\"}"));
+    server.send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
     #else
-    request->send(500, "application/json", F("{ \"result\"=\"Failed to serialize configuration\"}"));
+    request->send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
     #endif
   }
-else
+  else
 #ifndef ASYNC_WEBSERVER
-  server.send(200, "application/json", jsonString);
+    server.send(200, "application/json", jsonString);
 #else
-  request->send(200, "application/json", jsonString);
+    request->send(200, "application/json", jsonString);
 #endif
-  
 }
 #ifndef ASYNC_WEBSERVER
 void receiveConfig() 
@@ -479,12 +584,12 @@ void receiveConfig(AsyncWebServerRequest *request, JsonVariant &json)
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, jsonString);
   if (err) {
-    server.send(500, "application/json", F("{ \"result\"=\"Failed to deserialize configuration\"}"));
+    server.send(500, "application/json", F("{\"result\":\"Failed to deserialize configuration\"}"));
     Logln(err.f_str());
   }else{
     config = doc.as<Config>();
     config.firmware_version = FIRMWARE_VERSION; //este no se puede modificar!
-    server.send(200, "application/json", "{ \"result\"=\"Ok\"}");
+    server.send(200, "application/json", "{\"result\":\"Ok\"}");
     saveConfigFile(config_filename, config);
 
     server.stop();
@@ -495,7 +600,7 @@ void receiveConfig(AsyncWebServerRequest *request, JsonVariant &json)
 
   config = json.as<Config>();
   config.firmware_version = FIRMWARE_VERSION; //este no se puede modificar!
-  request->send(200, "application/json", "{ \"result\"=\"Ok\"}");
+  request->send(200, "application/json", "{\"result\":\"Ok\"}");
   saveConfigFile(config_filename, config);
 
   server.end();
@@ -553,6 +658,144 @@ bool _hasSuccessfulConnection = false;
 unsigned long previousReconnectMillis = 0;
 unsigned long intervalReconnect = 30000;
 bool _reconnecting = false;
+
+#ifndef WIFI_STA_CONNECT_ATTEMPTS
+#define WIFI_STA_CONNECT_ATTEMPTS 5
+#endif
+#ifndef WIFI_STA_ATTEMPT_TIMEOUT_SEC
+#define WIFI_STA_ATTEMPT_TIMEOUT_SEC 12
+#endif
+#ifndef WIFI_AP_RECOVERY_MS
+#define WIFI_AP_RECOVERY_MS 60000UL
+#endif
+
+static bool _apRecoveryMode = false;
+static bool _apClientAttached = false;
+static unsigned long _apRecoveryStartMs = 0;
+
+static void startSoftAccessPoint(bool recoveryWindow);
+static void onStaLinkUp();
+static bool attemptStaConnectOnce(int attemptIndex, int attemptTotal);
+static void pollApRecoveryTimeout();
+
+static void startSoftAccessPoint(bool recoveryWindow)
+{
+  WiFi.disconnect(true);
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_OFF);
+  delay(100);
+  WiFi.mode(WIFI_AP);
+
+  char apPsk[16];
+  provisioningApPsk(apPsk, sizeof(apPsk));
+  const IPAddress apIp(192, 168, 4, 1);
+  const IPAddress apMask(255, 255, 255, 0);
+  WiFi.softAPConfig(apIp, apIp, apMask);
+  const uint8_t apChannel = 1;
+  const bool apOk = WiFi.softAP(config.identifier, apPsk, apChannel, false, 4);
+
+  IPAddress myIP = WiFi.softAPIP();
+  Logf("AP SSID: %s  PSK: %s  ch=%u softAP=%s\n",
+    config.identifier, apPsk, apChannel, apOk ? "ok" : "fail");
+  Logf("AP IP address: %s\n", myIP.toString().c_str());
+
+  if (recoveryWindow) {
+    _apRecoveryMode = true;
+    _apClientAttached = false;
+    _apRecoveryStartMs = millis();
+    Logf("Recovery AP: %lu s para asociar un cliente; si no, reintento STA\n",
+      (unsigned long)(WIFI_AP_RECOVERY_MS / 1000));
+  } else {
+    _apRecoveryMode = false;
+    setRestartCount(0);
+  }
+
+  WiFi.setAutoReconnect(false);
+}
+
+static void onStaLinkUp()
+{
+  if (MDNS.begin(config.host_name)) {
+    _hasSuccessfulConnection = true;
+    Logln(F("MDNS responder started"));
+    if (config.modbus_server_enabled) {
+      uint16_t mbPort = config.modbus_port > 0 ? (uint16_t)config.modbus_port : 502;
+      MDNS.addService("uslvl", "tcp", mbPort);
+      MDNS.addServiceTxt("uslvl", "tcp", "id", config.identifier);
+      MDNS.addServiceTxt("uslvl", "tcp", "family", "ESP");
+      MDNS.addServiceTxt("uslvl", "tcp", "map", "2");
+    }
+  } else {
+    last_error_code = 1000;
+  }
+
+  Logf("Connected to %s\n", config.identifier);
+  Logf("IP address: %s\n", WiFi.localIP().toString().c_str());
+  memset(_wifiIp, 0, sizeof(_wifiIp));
+  strncpy(_wifiIp, WiFi.localIP().toString().c_str(), sizeof(_wifiIp) - 1);
+  setRestartCount(0);
+  setWifiCyclePhase(WIFI_CYCLE_NORMAL);
+  _reconnectTries = 0;
+}
+
+static bool attemptStaConnectOnce(int attemptIndex, int attemptTotal)
+{
+  Logf("STA intento %d/%d\n", attemptIndex, attemptTotal);
+  WiFi.mode(WIFI_STA);
+  WiFi.hostname(config.host_name);
+
+  if (config.ip_type == IP_STATIC) {
+    Logln(F("Setting Static IP."));
+    local_ip.fromString(config.ip_address);
+    gateway.fromString(config.gateway);
+    subnet.fromString(config.subnet);
+    primary_dns.fromString(config.primary_dns);
+    secondary_dns.fromString(config.secondary_dns);
+    WiFi.config(local_ip, gateway, subnet, primary_dns, secondary_dns);
+  }
+
+  WiFi.begin((const char*)config.ssid, (const char*)config.password);
+
+  const int maxHalfSeconds = WIFI_STA_ATTEMPT_TIMEOUT_SEC * 2;
+  int halfSecondsTried = 0;
+  while (WiFi.status() != WL_CONNECTED && halfSecondsTried < maxHalfSeconds) {
+    Serial.print(".");
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(250);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(250);
+    halfSecondsTried++;
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED)
+    return true;
+
+  WiFi.disconnect();
+  return false;
+}
+
+static void pollApRecoveryTimeout()
+{
+  if (!_apRecoveryMode)
+    return;
+
+  if (WiFi.softAPgetStationNum() > 0) {
+    if (!_apClientAttached) {
+      _apClientAttached = true;
+      Logln(F("Recovery AP: cliente asociado; permanece en AP para configurar"));
+    }
+    return;
+  }
+
+  if (!_apClientAttached && (millis() - _apRecoveryStartMs >= WIFI_AP_RECOVERY_MS)) {
+    Logln(F("Recovery AP: sin clientes; reinicio para reintentar STA"));
+    setWifiCyclePhase(WIFI_CYCLE_NORMAL);
+    delay(100);
+    ESP.restart();
+  }
+}
+
 void checkWifiStatus()
 {
    //print the Wi-Fi status every 30 seconds
@@ -591,8 +834,12 @@ void reconnectWifi()
     
     _reconnectTries++;
 
-    if(_reconnectTries > 5) //reiniciar despues de 5 intentos fallidos de conexión
+    if (_reconnectTries >= WIFI_STA_CONNECT_ATTEMPTS) {
+      Logln(F("STA: perdida prolongada; ciclo AP recuperacion"));
+      setWifiCyclePhase(WIFI_CYCLE_AP_RECOVERY);
+      delay(100);
       ESP.restart();
+    }
     
     _reconnecting = false;
     
@@ -602,78 +849,33 @@ void reconnectWifi()
 void connectWifi()
 {
   Logln(F("\nConnecting to wifi..."));
-  if(config.wifi_mode == WFSTA && _restartCount<3)
-  {
-      WiFi.mode(WIFI_STA);
-      
-      if(config.ip_type == IP_STATIC)
-      {
-        //Establecer manualmente la IP
-        Logln(F("Setting Static IP."));
 
-        local_ip.fromString(config.ip_address);
-        gateway.fromString(config.gateway);
-        subnet.fromString(config.subnet);
-        primary_dns.fromString(config.primary_dns);
-        secondary_dns.fromString(config.secondary_dns);
-
-        WiFi.config(local_ip, gateway, subnet, primary_dns, secondary_dns); 
-      }
-
-      WiFi.begin((const char*)config.ssid, (const char*)config.password);
-
-      int halfSecondsTried = 0;
-      //Esperar la conexión
-      while (WiFi.status() != WL_CONNECTED) {
-        Serial.print(".");
-        digitalWrite(LED_BUILTIN, LOW);
-        delay(250);
-        digitalWrite(LED_BUILTIN, HIGH);
-        delay(250);
-        halfSecondsTried++;
-        if(halfSecondsTried/2 > 30)
-        {
-          Logln(F("Can't connect to the SSID, you can reset 3 times to connect as AP and configure in http://192.168.4.1/config"));
-          digitalWrite(LED_BUILTIN, HIGH); //DEJAR EL LED ENCENDIDO
-          break;
-        }
-      }
-
-      WiFi.hostname(config.host_name);
-      if (MDNS.begin(config.host_name)) {
-        _hasSuccessfulConnection = true;
-        Logln(F("MDNS responder started"));
-        if (config.modbus_server_enabled) {
-          uint16_t mbPort = config.modbus_port > 0 ? (uint16_t)config.modbus_port : 502;
-          MDNS.addService("uslvl", "tcp", mbPort);
-          MDNS.addServiceTxt("uslvl", "tcp", "id", config.identifier);
-          MDNS.addServiceTxt("uslvl", "tcp", "family", "ESP");
-          MDNS.addServiceTxt("uslvl", "tcp", "map", "2");
-        }
-      }else{
-        last_error_code = 1000;
-      }
-      
-      Logf("Connected to %s\n", config.identifier);
-      Logf("IP address: %s\n", WiFi.localIP().toString().c_str());
-      //_wifiIp = WiFi.localIP().toString().c_str();
-      memcpy(_wifiIp, WiFi.localIP().toString().c_str(), 15);
-      setRestartCount(0);
+  if (config.wifi_mode == WFAP) {
+    startSoftAccessPoint(false);
+    return;
   }
 
-  else if(config.wifi_mode == WFAP || getRestartCount()>=3 )
-  {
-      WiFi.softAP(config.identifier);
-
-      IPAddress myIP = WiFi.softAPIP();
-      Logf("AP IP address: %s\n", myIP.toString().c_str());
-      Logf("Default AP: %s\n", config.identifier);
-
-      setRestartCount(0);
+  if (getWifiCyclePhase() == WIFI_CYCLE_AP_RECOVERY) {
+    startSoftAccessPoint(true);
+    return;
   }
 
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
+
+  for (int attempt = 1; attempt <= WIFI_STA_CONNECT_ATTEMPTS; attempt++) {
+    if (attemptStaConnectOnce(attempt, WIFI_STA_CONNECT_ATTEMPTS)) {
+      onStaLinkUp();
+      digitalWrite(LED_BUILTIN, HIGH);
+      return;
+    }
+  }
+
+  digitalWrite(LED_BUILTIN, HIGH);
+  Logln(F("STA: sin WiFi; siguiente arranque: AP de recuperacion"));
+  setWifiCyclePhase(WIFI_CYCLE_AP_RECOVERY);
+  delay(100);
+  ESP.restart();
 }
 
 ulong _restartAt = 0;
@@ -685,8 +887,31 @@ void setup(void) {
   //digitalWrite(led, 0);
 
   setupESPSerial();
+  delay(50);
+  // Diagnóstico flash/OTA (ESP8285 1MB: OTA debe ser > sketch)
+  Serial.printf("\n=== FLASH / OTA ===\n");
+  Serial.printf("TRUC_VERSION=%s\n", TRUC_VERSION);
+  Serial.printf("Flash real:     %u bytes (%.1f KB)\n", ESP.getFlashChipRealSize(), ESP.getFlashChipRealSize() / 1024.0f);
+  Serial.printf("Flash IDE:      %u bytes (%.1f KB)\n", ESP.getFlashChipSize(), ESP.getFlashChipSize() / 1024.0f);
+  Serial.printf("FS partition:   %u bytes (%.1f KB)\n", FS_PHYS_SIZE, FS_PHYS_SIZE / 1024.0f);
+  Serial.printf("Sketch actual:  %u bytes (%.1f KB)\n", ESP.getSketchSize(), ESP.getSketchSize() / 1024.0f);
+  Serial.printf("Free OTA space: %u bytes (%.1f KB)\n", ESP.getFreeSketchSpace(), ESP.getFreeSketchSpace() / 1024.0f);
+  {
+    const uint32_t flashReal = ESP.getFlashChipRealSize();
+    const uint32_t fsPart = FS_PHYS_SIZE;
+    const uint32_t freeOta = ESP.getFreeSketchSpace();
+    const char *otaLayout = inferOtaFsLayout(flashReal, fsPart, freeOta);
+    Serial.printf("OTA layout:     %s (fs_ota_layout para servidor)\n",
+                  otaLayout ? otaLayout : "(sin coincidencia en catálogo)");
+    if (!otaLayout)
+      Serial.printf(
+          "  layout debug: flash=%u fs=%u free_ota=%u (sube OtaFsLayout.h o "
+          "revisa Flash size en IDE)\n",
+          flashReal, fsPart, freeOta);
+  }
+  Serial.printf("Free heap:      %u bytes\n", ESP.getFreeHeap());
+  Serial.printf("===================\n\n");
 
-  /*CONTEO DE REINICIOS, AL TERCER REINICIO SE CONECTA COMO AP*/
   EEPROM.begin(EEPROM_SIZE);
   _restartCount = getRestartCount();
   if(_restartCount > 3)
@@ -696,14 +921,16 @@ void setup(void) {
   }else 
     setRestartCount(_restartCount+1); //Aumentar la cuenta de reinicios, se resetea al conectarse al WIFI
 
-  if (!LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED)) {
-    last_error_code = 10300;
-    Logln(F("Failed to mount LittleFS. Please format the partition."));
-  }
+  mountLittleFs();
 
   bool loaded = loadConfigFile(config_filename, config);
   if(!loaded) //Guardar parametros por default
     resetConfig();
+
+  if (ensureFactoryIdentity(config)) {
+    saveConfigFile(config_filename, config);
+    Logf("Factory identifier: %s\n", config.identifier);
+  }
 
   if(config.avg_count == 0 || config.avg_count > 10)
     config.avg_count = 4;
@@ -720,10 +947,14 @@ void setup(void) {
   #else
   AsyncCallbackJsonWebHandler* handler = new AsyncCallbackJsonWebHandler("/config", [](AsyncWebServerRequest *request, JsonVariant &json) 
   {
+    char keepId[sizeof(config.identifier)];
+    strlcpy(keepId, config.identifier, sizeof(keepId));
     config = json.as<Config>();
+    strlcpy(config.identifier, keepId, sizeof(config.identifier));
     config.firmware_version = FIRMWARE_VERSION; //este no se puede modificar!
-    request->send(200, "application/json", "{ \"result\"=\"Ok\"}");
+    request->send(200, "application/json", "{\"result\":\"Ok\"}");
     saveConfigFile(config_filename, config);
+    setWifiCyclePhase(WIFI_CYCLE_NORMAL);
     //server.end();
     //delay(100);
     //ESP.reset();
@@ -754,94 +985,123 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
     return;
   }
 
-  Logln(F("Request set-config\n"));
-  StreamString temp;
-  if(!temp.reserve(1800)){
-    Logln("No memory");
-    request->send(200, "text/html", "NO MEMORY!");
-    return;
-  }
-
-  temp.printf("\
-<html>\
-  <head>\
-    <title>Hidraquim SA de CV - IOT</title>\
-    <style>\
-      body { background-color: #cccccc; font-family: Arial, Helvetica, Sans-Serif; Color: #000088; }\
-    </style>\
-  </head>\
-  <body>\
-    <h1>Configución básica</h1>\
-    <p><strong>Identificador</strong></p>\
-    <form method=\"post\" action=\"/set-config\">\
-    <p><label>HOST NAME:</label> <input name=\"host\" value=\"%s\"/></p>\
-    <p><label>IDENTIFICADOR:</label> <input name=\"ident\" value=\"%s\"/></p>\
-    <p><strong>Conexión WiFi</strong></p>\
-    <p><label>Modo: </label><select name=\"mod\" value=\"%d\"><option value=\"0\">Access point</option><option value=\"1\">Estacion</option></select>\
-    <p><label>SSID: </label><input name=\"ssid\" value=\"%s\"/></p>\
-    <p><label>PASS: </label><input name=\"pwd\" value=\"\"/></p>\
-    <p></p>\
-    <p><strong>Servidor TCP</strong></p>\
-    <p><label>Host: </label><input name=\"server\" value=\"%s\"/></p>\
-    <p><label>Puerto: </label><input name=\"port\" value=\"%d\"/></p>\
-    <p></p>\
-    <p><strong>Tipo de sensor</strong></p>\
-    <p><select name=\"st\" value=\"%d\">\
-    <option value=\"0\">US A02YYUW</option>\
-    <option value=\"1\">Rhino I-QY</option>\
-    <option value=\"2\">Dibatec Lumina SS</option>\
-    </select>\
-    <p><label>Umbral: </label><input name=\"umbral\" value=\"%.2f\">\
-    <p><button>Guardar</button></p></form>\
-  </body>\
-</html>",  config.host_name, config.identifier,config.wifi_mode, config.ssid, config.server_host, config.server_port, config.sensor_type, config.umbral_error);
-
-  request->send(200, "text/html; charset=utf-8", temp.c_str());
-
-  });
+  String html;
+  html.reserve(2800);
+  html += F("<!doctype html><html><head><meta charset=utf-8>");
+  html += F("<meta name=viewport content=\"width=device-width,initial-scale=1\">");
+  html += F("<title>Config</title>");
+  appendHqCss(html);
+  html += F("</head><body><div class=w><div class=c>");
+  html += F("<h1>Configuración</h1><p class=s>");
+  html += config.identifier;
+  html += F("</p><form method=post action=/set-config>");
+  html += F("<input type=hidden name=cfgform value=1>");
+  html += F("<p class=h>Identidad</p>");
+  html += F("<label>Host name</label><input name=host maxlength=15 value=\"");
+  html += config.host_name;
+  html += F("\"><p class=h>Identificador de fábrica</p>");
+  html += F("<div class=r><span class=k>Identifier</span><span class=v>");
+  html += config.identifier;
+  html += F("</span></div><p class=s>No editable (prefijo HQ_IOT_).</p><p class=h>WiFi</p>");
+  html += F("<label>Modo</label><select name=mod>");
+  html += (config.wifi_mode == 0) ? F("<option value=0 selected>Access point</option>") : F("<option value=0>Access point</option>");
+  html += (config.wifi_mode == 1) ? F("<option value=1 selected>Station</option>") : F("<option value=1>Station</option>");
+  html += F("</select><label>SSID</label><input name=ssid maxlength=31 value=\"");
+  html += config.ssid;
+  html += F("\"><label>Password</label><input name=pwd type=password maxlength=23 placeholder=\"(sin cambio)\">");
+  html += F("<p class=h>Comunicación</p>");
+  appendToggle(html, "tcpcl", "tcpcl", "Cliente TCP (relay 0x32)", config.tcp_client_enabled != 0);
+  html += F("<label>Servidor TCP</label><input name=server maxlength=31 value=\"");
+  html += config.server_host;
+  html += F("\"><label>Puerto TCP</label><input name=port type=number min=0 max=65535 value=\"");
+  html += String(config.server_port);
+  html += F("\">");
+  appendToggle(html, "mben", "mben", "Servidor Modbus TCP", config.modbus_server_enabled != 0);
+  html += F("<label>Puerto Modbus</label><input name=mbport type=number min=1 max=65535 value=\"");
+  html += String(config.modbus_port > 0 ? config.modbus_port : 502);
+  html += F("\"><p class=h>Sensor</p><label>Tipo</label><select name=st>");
+  html += (config.sensor_type == 0) ? F("<option value=0 selected>US A02YYUW</option>") : F("<option value=0>US A02YYUW</option>");
+  html += (config.sensor_type == 1) ? F("<option value=1 selected>Rhino I-QY</option>") : F("<option value=1>Rhino I-QY</option>");
+  html += (config.sensor_type == 2) ? F("<option value=2 selected>Dibatec Lumina</option>") : F("<option value=2>Dibatec Lumina</option>");
+  html += F("</select><label>Umbral error</label><input name=umbral type=number step=0.01 min=0 value=\"");
+  html += String(config.umbral_error, 2);
+  html += F("\"><button type=submit>Guardar</button></form>");
+  html += F("<div class=n><a href=/>Home</a><a href=/map>Map</a><a href=/set-config?format=json>JSON</a></div>");
+  html += F("</div></div></body></html>");
+  request->send(200, "text/html; charset=utf-8", html);
+});
 
   server.on("/set-config", HTTP_POST, [](AsyncWebServerRequest* request) {
-    String message;
+    if (request->hasParam("host", true))
+      strlcpy(config.host_name, request->getParam("host", true)->value().c_str(), sizeof(config.host_name));
 
-    if (request->hasParam("host", true) && request->hasParam("ident", true)) {
-      memcpy(config.host_name, request->getParam("host", true)->value().c_str(), 16);
-      memcpy(config.identifier, request->getParam("ident", true)->value().c_str(), 16);  
-      message = "Host and Identifier Set\n";
-    } 
-
-    if (request->hasParam("mod", true) && request->hasParam("ssid", true) && request->hasParam("pwd", true)) {
+    if (request->hasParam("mod", true) && request->hasParam("ssid", true)) {
       String wifiMode = request->getParam("mod", true)->value();
-      memcpy(config.ssid, request->getParam("ssid", true)->value().c_str(), 32);
-      memcpy(config.password, request->getParam("pwd", true)->value().c_str(), 24);  
-      if(wifiMode == "0") 
+      strlcpy(config.ssid, request->getParam("ssid", true)->value().c_str(), sizeof(config.ssid));
+      if (request->hasParam("pwd", true) && request->getParam("pwd", true)->value().length() > 0)
+        strlcpy(config.password, request->getParam("pwd", true)->value().c_str(), sizeof(config.password));
+      if (wifiMode == "0")
         config.wifi_mode = 0;
-      else if(wifiMode == "1") 
+      else if (wifiMode == "1")
         config.wifi_mode = 1;
-      message += "SSID and Password Set\n";
-    } 
+    }
 
-    if(request->hasParam("st",true)){
-      String st = request->getParam("st", true)->value();
-      if(st  == "0") 
-        config.sensor_type = 0;
-      if(st == "1") 
-        config.sensor_type = 1;
-      if(st == "2") 
-        config.sensor_type = 2;
-
-        message += "Sensor type Set\n";
+    if (request->hasParam("st", true)) {
+      int st = request->getParam("st", true)->value().toInt();
+      if (st >= 0 && st <= 2)
+        config.sensor_type = st;
     }
 
     if (request->hasParam("server", true) && request->hasParam("port", true)) {
-      
-      memcpy(config.server_host, request->getParam("server", true)->value().c_str(), 32);
+      strlcpy(config.server_host, request->getParam("server", true)->value().c_str(), sizeof(config.server_host));
       config.server_port = request->getParam("port", true)->value().toInt();
-      message += "Server Set\n";
     }
-    
+
+    if (request->hasParam("cfgform", true)) {
+      short tcpOn = request->hasParam("tcpcl", true) ? 1 : 0;
+      if (tcpOn != config.tcp_client_enabled) {
+        config.tcp_client_enabled = tcpOn;
+        if (!tcpOn) {
+          _sendTCPData = false;
+          _isConnecting = false;
+          if (_tcpClient.connected())
+            _tcpClient.close(true);
+        } else {
+          _lastTCPAlive = millis();
+        }
+      }
+
+      short mbOn = request->hasParam("mben", true) ? 1 : 0;
+      if (request->hasParam("mbport", true)) {
+        int mbPort = request->getParam("mbport", true)->value().toInt();
+        if (mbPort > 0 && mbPort <= 65535)
+          config.modbus_port = (short)mbPort;
+      }
+      if (mbOn != config.modbus_server_enabled) {
+        config.modbus_server_enabled = mbOn;
+        if (!mbOn && modbusSlave.isRunning())
+          modbusSlave.end();
+        else if (mbOn && WiFi.status() == WL_CONNECTED)
+          startModbus();
+      }
+    }
+
+    if (request->hasParam("umbral", true))
+      config.umbral_error = request->getParam("umbral", true)->value().toFloat();
+
     saveConfigFile(config_filename, config);
-    
-    request->send(200, "text/plain", "Set-SSID Result: " + message);
+    if (config.wifi_mode == WFSTA)
+      setWifiCyclePhase(WIFI_CYCLE_NORMAL);
+
+    String html;
+    html.reserve(600);
+    html += F("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">");
+    html += F("<title>OK</title>");
+    appendHqCss(html);
+    html += F("</head><body><div class=w><div class=c><h1 class=ok>Guardado</h1>");
+    html += F("<p class=s>Reinicia el equipo si cambiaste WiFi.</p>");
+    html += F("<div class=n><a href=/set-config>Volver</a><a href=/>Home</a></div></div></div></body></html>");
+    request->send(200, "text/html; charset=utf-8", html);
   });
 /*
   server.on("/last-error", [](){
@@ -855,7 +1115,7 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
     ssid.toCharArray(config.ssid, ssid.length()+1);
     password.toCharArray(config.password, password.length()+1);
     saveConfigFile(config_filename, config);
-    server.send(200, "application/json", "{ \"result\"=\"Ok\"}");
+    server.send(200, "application/json", "{\"result\":\"Ok\"}");
     server.stop();
     delay(100);
     ESP.reset();
@@ -867,7 +1127,7 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
         server.send(200, "text/plain",F("Failed to mount LittleFS. Please format the partition."));
       }else{
         resetConfig();
-        server.send(200, "application/json", "{ \"result\"=\"Ok\"}");
+        server.send(200, "application/json", "{\"result\":\"Ok\"}");
         server.stop();
         delay(100);
         ESP.reset();
@@ -879,9 +1139,9 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
       bool loaded = loadConfigFile(config_filename, config);
       if(!loaded) //Guardar parametros por default
       {
-        server.send(500, "application/json", F("{ \"result\"=\"Failed to load config\"}"));
+        server.send(500, "application/json", F("{\"result\":\"Failed to load config\"}"));
       }else 
-        server.send(200, "application/json", "{ \"result\"=\"Ok\"}");
+        server.send(200, "application/json", "{\"result\":\"Ok\"}");
   });
 */
 #ifndef ASYNC_WEBSERVER
@@ -899,60 +1159,176 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
     JsonArray arrayDec = doc.createNestedArray("rec");
 
     // add some values
-    for(int i = 0; i<=17; i++)
+    for(int i = 0; i < 18; i++)
       array.add(bufferDib[i]);
 
-    for(int i = 0; i<=7; i++)
+    for(int i = 0; i < 7; i++)
       arrayReal.add(real_part[i]);
 
-    for(int i = 0; i<=3; i++)
+    for(int i = 0; i < 3; i++)
       arrayDec.add(decimal_part[i]);
     
     String jsonString;
-    bool success = serializeJsonPretty(doc, jsonString) > 0;
-    if (!success) {
-      request->send(500, "application/json", F("{ \"result\"=\"Failed to serialize weight\"}"));
-    }
+    if (serializeJson(doc, jsonString) == 0)
+      request->send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
     else
       request->send(200, "application/json", jsonString);
-    
   });
+
+  {
+    AsyncCallbackJsonWebHandler *provHandler = new AsyncCallbackJsonWebHandler(
+        "/ap-mode",
+        [](AsyncWebServerRequest *request, JsonVariant &json) {
+          const char *given = json["password"] | "";
+          if (!provisioningPasswordOk(given)) {
+            request->send(403, "application/json", F("{\"result\":\"forbidden\"}"));
+            return;
+          }
+
+          config.wifi_mode = WFAP;
+          saveConfigFile(config_filename, config);
+          setRestartCount(0);
+          setWifiCyclePhase(WIFI_CYCLE_NORMAL);
+
+          char apPsk[16];
+          provisioningApPsk(apPsk, sizeof(apPsk));
+
+          JsonDocument doc;
+          doc["result"] = "Ok";
+          doc["wifi_mode"] = 0;
+          doc["identifier"] = config.identifier;
+          doc["ap_ssid"] = config.identifier;
+          doc["ap_password"] = apPsk;
+          doc["ap_ip"] = "192.168.4.1";
+          doc["restart_in_ms"] = 3000;
+          String jsonString;
+          serializeJson(doc, jsonString);
+          request->send(200, "application/json", jsonString);
+          _restartAt = millis() + 3000;
+        });
+    provHandler->setMethod(HTTP_POST);
+    server.addHandler(provHandler);
+  }
 
   server.on("/ver", [](AsyncWebServerRequest *request)
   {
-    if (wantsJson(request))
-    {
-      JsonDocument doc;
-      doc["version"] = TRUC_VERSION;
-      doc["firmware_version"] = FIRMWARE_VERSION;
-      doc["spiffs_version"] = SPIFFS_VERSION;
-      String jsonString;
-      serializeJson(doc, jsonString);
-      request->send(200, "application/json", jsonString);
+    JsonDocument doc;
+    doc["family"] = "Esp";
+    doc["identifier"] = config.identifier;
+    doc["host_name"] = config.host_name;
+    doc["version"] = TRUC_VERSION;
+    doc["firmware_version"] = FIRMWARE_VERSION;
+    doc["spiffs_version"] = SPIFFS_VERSION;
+    doc["wifi_mode"] = config.wifi_mode;
+    if (config.wifi_mode == WFAP) {
+      char apPsk[16];
+      provisioningApPsk(apPsk, sizeof(apPsk));
+      doc["ap_password"] = apPsk;
     }
-    else
-      request->send(200, "text/plain", TRUC_VERSION);
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["free_sketch"] = ESP.getFreeSketchSpace();
+    doc["flash_real_bytes"] = ESP.getFlashChipRealSize();
+    doc["fs_partition_bytes"] = FS_PHYS_SIZE;
+    if (const char *lay = currentOtaFsLayoutId())
+      doc["fs_ota_layout"] = lay;
+    String jsonString;
+    serializeJson(doc, jsonString);
+    request->send(200, "application/json", jsonString);
+  });
+
+  // Diagnóstico de memoria/partición (no dispara OTA ni escribe flash)
+  server.on("/space", HTTP_GET, [](AsyncWebServerRequest *request)
+  {
+    JsonDocument doc;
+    doc["truc_version"] = TRUC_VERSION;
+    doc["flash_real_bytes"] = ESP.getFlashChipRealSize();
+    doc["flash_ide_bytes"] = ESP.getFlashChipSize();
+    doc["sketch_bytes"] = ESP.getSketchSize();
+    doc["free_ota_bytes"] = ESP.getFreeSketchSpace();
+    doc["fs_partition_bytes"] = FS_PHYS_SIZE;
+    if (const char *lay = currentOtaFsLayoutId())
+      doc["fs_ota_layout"] = lay;
+    doc["littlefs_ok"] = g_littleFsOk;
+    doc["free_heap_bytes"] = ESP.getFreeHeap();
+    doc["flash_real_kb"] = ESP.getFlashChipRealSize() / 1024.0f;
+    doc["flash_ide_kb"] = ESP.getFlashChipSize() / 1024.0f;
+    doc["sketch_kb"] = ESP.getSketchSize() / 1024.0f;
+    doc["free_ota_kb"] = ESP.getFreeSketchSpace() / 1024.0f;
+    String jsonString;
+    serializeJson(doc, jsonString);
+    request->send(200, "application/json", jsonString);
+  });
+
+  // Mapa Modbus tipado para promote del poller HQ.ModbusRealtime
+  server.on("/map", HTTP_GET, [](AsyncWebServerRequest *request)
+  {
+    const char *typeName = "UNKNOWN";
+    const char *valueUnit = "";
+    if (config.sensor_type == 0)
+    {
+      typeName = "US LEVEL A02YYUW";
+      valueUnit = "m";
+    }
+    else if (config.sensor_type == 1)
+    {
+      typeName = "I-QY WEIGHT INDICATOR";
+      valueUnit = "kg";
+    }
+    else if (config.sensor_type == 2)
+    {
+      typeName = "DIBATEC LUMINA";
+      valueUnit = "kg";
+    }
+
+    JsonDocument doc;
+    doc["family"] = "Esp";
+    doc["mapVersion"] = MODBUS_MAP_VERSION;
+    doc["sensorType"] = config.sensor_type;
+    doc["sensorTypeName"] = typeName;
+    doc["unitId"] = 1;
+    doc["pollIntervalMs"] = 300;
+    doc["timeoutMs"] = 2000;
+
+    JsonArray ranges = doc.createNestedArray("ranges");
+    JsonObject range0 = ranges.createNestedObject();
+    range0["area"] = "Holding";
+    range0["startTag"] = "0";
+    range0["endTag"] = "22";
+
+    JsonArray tags = doc.createNestedArray("tags");
+
+    #define HQ_MAP_TAG(_tag, _addr, _dt, _regs, _chars, _unit) \
+      do { \
+        JsonObject o = tags.createNestedObject(); \
+        o["tag"] = (_tag); \
+        o["area"] = "Holding"; \
+        o["address"] = (_addr); \
+        o["dataType"] = (_dt); \
+        o["byteOrder"] = "ABCD"; \
+        o["registerCount"] = (_regs); \
+        o["charCount"] = (_chars); \
+        o["scale"] = 1; \
+        o["unit"] = (_unit); \
+      } while (0)
+
+    HQ_MAP_TAG("value", 0, "Float32", 2, 0, valueUnit);
+    HQ_MAP_TAG("error", 2, "UInt16", 1, 0, "");
+    HQ_MAP_TAG("firmware", 3, "UInt16", 1, 0, "");
+    HQ_MAP_TAG("sensor_id", 4, "UInt16", 1, 0, "");
+    HQ_MAP_TAG("signature", 5, "UInt16", 1, 0, "");
+    HQ_MAP_TAG("map_version", 6, "UInt16", 1, 0, "");
+    HQ_MAP_TAG("identifier", 7, "String", 8, 16, "");
+    HQ_MAP_TAG("host_name", 15, "String", 8, 16, "");
+    #undef HQ_MAP_TAG
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+    request->send(200, "application/json", jsonString);
   });
 
   server.on("/log", HTTP_GET, [](AsyncWebServerRequest *request)
   {
-    if (wantsJson(request))
-    {
-      request->send(200, "application/json", serialLogJson());
-      return;
-    }
-
-    String body;
-    body.reserve(1400);
-    body += F("<!DOCTYPE html><html><head><meta charset=\"utf-8\">");
-    body += F("<meta http-equiv=\"refresh\" content=\"3\">");
-    body += F("<title>Serial log</title>");
-    body += F("<style>body{font-family:monospace;background:#111;color:#0f0;padding:12px}");
-    body += F("pre{white-space:pre-wrap}</style></head><body>");
-    body += F("<h3>Últimas líneas</h3><pre>");
-    body += serialLogText();
-    body += F("</pre><p><a href=\"/log\">refresh</a> · <a href=\"/log?format=json\">json</a></p></body></html>");
-    request->send(200, "text/html; charset=utf-8", body);
+    request->send(200, "application/json", serialLogJson());
   });
 
   server.on("/update", [](AsyncWebServerRequest *request)
@@ -996,12 +1372,11 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
     array.add(data[3]);
 
     String jsonString;
-    bool success = serializeJsonPretty(doc, jsonString) > 0;
-    if (!success) {
+    if (serializeJson(doc, jsonString) == 0) {
       #ifndef ASYNC_WEBSERVER
-      server.send(500, "application/json", F("{ \"result\"=\"Failed to serialize distance\"}"));
+      server.send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
       #else
-      request->send(500, "application/json", F("{ \"result\"=\"Failed to serialize distance\"}"));
+      request->send(500, "application/json", F("{\"result\":\"serialize_failed\"}"));
       #endif
     }
     else
@@ -1010,7 +1385,6 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
     #else
       request->send(200, "application/json", jsonString);
     #endif
-    
   });
 
   config.firmware_version = FIRMWARE_VERSION;
@@ -1046,6 +1420,10 @@ void startModbus()
 
 void pauseNetForUpdate()
 {
+  // Solo pausar Modbus + cliente TCP. NO hacer server.end():
+  // en ESP8266 AsyncWebServer end()+begin() a menudo deja el puerto 80
+  // muerto (ERR_CONNECTION_REFUSED) mientras Modbus sigue vivo porque
+  // recrea su AsyncServer.
   if (modbusSlave.isRunning())
   {
     modbusSlave.end();
@@ -1054,7 +1432,6 @@ void pauseNetForUpdate()
   if (_tcpClient.connected())
     _tcpClient.close(true);
   _isConnecting = false;
-  server.end();
   for (int i = 0; i < 20; i++)
   {
     delay(10);
@@ -1065,7 +1442,6 @@ void pauseNetForUpdate()
 
 void resumeNetAfterUpdate()
 {
-  server.begin();
   _lastTCPAlive = millis();
   if (_modbusPausedForUpdate)
   {
@@ -1074,7 +1450,7 @@ void resumeNetAfterUpdate()
   }
 }
 
-int last_level_miliseconds = 0;
+unsigned long last_level_miliseconds = 0;
 int headStart = 0;
 float sumDelta = 0;
 
@@ -1105,7 +1481,8 @@ void consumeDibatec(void)
     }
     else if(data == 13)
     {
-      bufferDib[bufferDBPos] = data;
+      if (bufferDBPos < 18)
+        bufferDib[bufferDBPos] = data;
       inBufferDB = false;
       parseBuffer(bufferDBPos-1);
       memset(bufferDib,0,sizeof(bufferDib)); //Poner a ceros
@@ -1129,8 +1506,8 @@ float calcValue()
   //Sumar la parte entera
   for(int i = real_pos-1; i>=0; i--)
     result += real_part[i] * _power[(real_pos - i - 1)]; // pow(10, (real_pos - i - 1));
-  //Sumar la parte decimal
-  for (int j = 0; j <= decimal_pos; j++)
+  // decimal_pos es la cantidad de dígitos ya guardados (0..3).
+  for (int j = 0; j < decimal_pos && j < 3; j++)
     result += ((float)decimal_part[j]) / _power[j+1]; //pow( 10, j + 1);
   return result;
 }
@@ -1193,7 +1570,9 @@ void parseBuffer(int len)
   if(isNeg) //Si es negativo
     present_value = -1*present_value;
 
-    Logf("Peso: %.2f", present_value);
+  distancia_error = 0;
+  last_level_miliseconds = millis();
+  Logf("Peso: %.2f", present_value);
 }
 
 
@@ -1217,7 +1596,11 @@ void consumeIQYData(void)
           if(real_pos > 0) //Ya se leyo el entero, parsear a un flotante
           {
             present_value=calcValue(); //Guardar el valor presente
+            if (isNeg)
+              present_value = -present_value;
             isNeg = false;
+            distancia_error = 0;
+            last_level_miliseconds = millis();
             Serial.flush();
           }
           memset(real_part,0,sizeof(real_part)); //Poner a ceros
@@ -1236,12 +1619,12 @@ void consumeIQYData(void)
     {
         if(dataChar >= 48 && dataChar <= 57) //Un número del 0 al 9
         {
-          if(in_real) //Parte entera
+          if(in_real && real_pos < 7) //Parte entera
           {
               real_part[real_pos] = dataChar -48;
               real_pos++;
           }
-          else if(in_decimal) //Parte decimal
+          else if(in_decimal && decimal_pos < 3) //Parte decimal
           {
               decimal_part[decimal_pos] = dataChar -48;
               decimal_pos++;
@@ -1375,6 +1758,10 @@ unsigned long _last_updated = 0;
 bool _didFirstOtaCheck = false;
 void loop(void) 
 {
+  if (_restartAt != 0 && (long)(millis() - _restartAt) >= 0) {
+    _restartAt = 0;
+    ESP.reset();
+  }
 
   if(config.sensor_type == 0)
     consumeUSLevel();
@@ -1389,14 +1776,16 @@ void loop(void)
   server.handleClient();
 #endif  
   
-  if(config.wifi_mode == WFSTA)
-    MDNS.update();
-    
-  if(_restartCount < 3)
-    checkWifiStatus();
+  pollApRecoveryTimeout();
 
-  if(_restartCount < 3 && config.tcp_client_enabled)
-    tcpConnect();
+  if (config.wifi_mode == WFSTA && !_apRecoveryMode)
+    MDNS.update();
+
+  if (config.wifi_mode == WFSTA && !_apRecoveryMode) {
+    checkWifiStatus();
+    if (config.tcp_client_enabled)
+      tcpConnect();
+  }
 
   unsigned long currentMillis = millis();
   if(config.tcp_client_enabled && _sendTCPData && ((currentMillis-25) > _lastSendTCPMS) && _tcpClient.canSend()) //Cada 25ms minimo
@@ -1425,22 +1814,44 @@ void loop(void)
     _enable_update = false;
     _didFirstOtaCheck = true;
     _last_updated = millis();
-    Logf("OTA %s -> %s\n", TRUC_VERSION, updateUrl);
-    pauseNetForUpdate();
-    _last_update_result = actualUpdate(true);
-    if (_last_update_result == HTTP_UPDATE_OK)
+    Logf("OTA check %s -> %s\n", TRUC_VERSION, updateUrl);
+    int probe = probeSketchUpdate();
+    if (probe == 200)
     {
-      delay(100);
-      ESP.reset();
+      Logf("OTA bin disponible, pausando Modbus\n");
+      pauseNetForUpdate();
+      _last_update_result = actualUpdate(true);
+      if (_last_update_result == HTTP_UPDATE_OK)
+      {
+        delay(100);
+        ESP.reset();
+      }
+      else
+        Logf("OTA fallo %d\n", (int)_last_update_result);
+      resumeNetAfterUpdate();
     }
-    resumeNetAfterUpdate();
+    else
+    {
+      _last_update_result = (probe == 304) ? HTTP_UPDATE_NO_UPDATES : HTTP_UPDATE_FAILED;
+      Logf("OTA sin bin (%d), Modbus sigue\n", probe);
+    }
   }
 
-  // Sin tráfico TCP durante 5 minutos: reset de último recurso.
-  // No corre si acabamos de consultar OTA (resumeNetAfterUpdate refresca el contador).
-  if(config.tcp_client_enabled && config.server_port > 0 && (millis() - _lastTCPAlive) > 300000 && WiFi.status() == WL_CONNECTED )
-  { 
-    Logf("Restart ESP %d - %d", millis(), _lastTCPAlive);
+  // Reset solo si TCP y Modbus llevan 5 min callados.
+  // Modbus solo alarga el plazo después de atender una trama; si nunca
+  // respondió, no impide el reinicio. El chequeo OTA refresca el contador TCP.
+  unsigned long aliveMs = _lastTCPAlive;
+  if (config.modbus_server_enabled && modbusSlave.hasServedRequest())
+  {
+    unsigned long mbMs = modbusSlave.lastRequestMs();
+    if ((long)(mbMs - aliveMs) > 0)
+      aliveMs = mbMs;
+  }
+  bool tcpArmed = config.tcp_client_enabled && config.server_port > 0;
+  bool modbusArmed = config.modbus_server_enabled;
+  if ((tcpArmed || modbusArmed) && WiFi.status() == WL_CONNECTED && (millis() - aliveMs) > 300000)
+  {
+    Logf("Restart ESP tcp=%lu modbus=%lu served=%d\n", _lastTCPAlive, modbusSlave.lastRequestMs(), modbusSlave.hasServedRequest() ? 1 : 0);
     ESP.reset();
   }
 }

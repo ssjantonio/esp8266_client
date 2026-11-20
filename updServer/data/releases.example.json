@@ -1,3 +1,56 @@
 {
-  "releases": []
+  "releases": [
+    {
+      "id": 1,
+      "name": "USLvlSensor esp8285",
+      "user": "admin",
+      "released_at": "2026-01-01T12:00:00.000Z",
+      "numeric_version": 10008,
+      "version": "1_0_8",
+      "type": "esp8266",
+      "fs_ota_layout": "1M64K512K",
+      "flash_mb": 1,
+      "board": "esp8285",
+      "binary_file": "storage/bin/esp8266/ejemplo_1m64.bin"
+    },
+    {
+      "id": 2,
+      "name": "USLvlSensor transición 1M",
+      "user": "admin",
+      "released_at": "2026-01-01T12:00:00.000Z",
+      "numeric_version": 10007,
+      "version": "1_0_7",
+      "type": "esp8266",
+      "fs_ota_layout": "",
+      "flash_mb": 1,
+      "board": "esp8285 legacy",
+      "binary_file": "storage/bin/esp8266/ejemplo_legacy_1m.bin"
+    },
+    {
+      "id": 3,
+      "name": "USLvlSensor 4M",
+      "user": "admin",
+      "released_at": "2026-01-01T12:00:00.000Z",
+      "numeric_version": 10008,
+      "version": "1_0_8",
+      "type": "esp8266",
+      "fs_ota_layout": "4M2M1M",
+      "flash_mb": 4,
+      "board": "esp8266",
+      "binary_file": "storage/bin/esp8266/ejemplo_4m2m.bin"
+    },
+    {
+      "id": 4,
+      "name": "Demo ESP32 universal",
+      "user": "admin",
+      "released_at": "2026-01-01T12:00:00.000Z",
+      "numeric_version": 10000,
+      "version": "1_0_0",
+      "type": "esp32",
+      "fs_ota_layout": "",
+      "flash_mb": 0,
+      "board": "",
+      "binary_file": "storage/bin/esp32/ejemplo.bin"
+    }
+  ]
 }

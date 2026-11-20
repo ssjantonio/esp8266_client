@@ -94,7 +94,7 @@ void Logln(int value)
   serialLogLine(buf);
 }
 
-void Logln(IPAddress ip)
+void Logln(const IPAddress &ip)
 {
   Serial.println(ip);
   serialLogLine(ip.toString().c_str());

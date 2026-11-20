@@ -27,11 +27,20 @@ public:
   uint16_t getHolding(uint16_t addr) const;
   void setAsciiBlock(uint16_t startAddr, const char *text, uint8_t maxChars);
 
+  // true después de atender al menos una trama Modbus.
+  bool hasServedRequest() const { return _servedRequest; }
+  unsigned long lastRequestMs() const { return _lastRequestMs; }
+
 private:
   AsyncServer *_server = nullptr;
   bool _running = false;
   uint16_t _holding[MODBUS_HOLDING_COUNT];
   uint8_t _activeClients = 0;
+  AsyncClient *_clients[2] = {nullptr, nullptr};
+  bool _servedRequest = false;
+  unsigned long _lastRequestMs = 0;
+
+  void forgetClient(AsyncClient *client);
 
   static void onNewClient(void *arg, AsyncClient *client);
   static void onClientData(void *arg, AsyncClient *client, void *data, size_t len);

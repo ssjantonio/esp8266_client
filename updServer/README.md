@@ -1,17 +1,53 @@
-# Servidor OTA ESP8266 (`updServer`)
+# Servidor OTA (`updServer`)
 
-Servicio HTTP ligero (Node.js + nginx) compatible con `ESP8266httpUpdate` y panel de carga de firmware.
+Servicio HTTP ligero (Node.js + nginx) compatible con **ESP8266httpUpdate** y **ESP32 HTTPUpdate**, más panel de carga.
 
 ## Endpoints
 
 | Ruta | Auth | Uso |
 |------|------|-----|
-| `GET /update/esp8266` | No | OTA desde el sketch (`AutoUpdate.h`) |
-| `GET/POST /upload-esp8266` | Basic (nginx) | Listar y subir `.bin` |
+| `GET /update/esp8266` | No | OTA ESP8266/8285 (`User-Agent: ESP8266-http-Update`) |
+| `GET /update/esp32` | No | OTA ESP32 (`User-Agent: ESP32-http-Update`) |
+| `GET/POST /upload-esp8266` | Basic (nginx) | Listar y subir `.bin` (8266 y 32) |
 
-La lógica replica el controlador Laravel `UpdateESP8266Controller` (cabeceras `ESP8266-http-Update`, `x-esp8266-version`, `x-esp8266-mode`).
+## Cómo elige el binario
 
-Metadatos en `data/releases.json`; binarios en `storage/bin/esp8266/`.
+### ESP8266 — por layout FS/OTA (`fs_ota_layout`)
+
+El dispositivo envía (además de `x-*-version`):
+
+| Cabecera | Origen |
+|----------|--------|
+| `x-ESP8266-chip-size` | Flash real (bytes) |
+| `x-ESP8266-free-space` | Espacio OTA disponible (~tamaño slot) |
+| `x-ESP8266-fs-partition-bytes` | Partición FS del build (`FS_PHYS_SIZE`) |
+
+El servidor **infiere** un id de layout (p. ej. `1M64K512K`, `4M2M1M`) y busca en `releases.json` un release con el **mismo** `fs_ota_layout` y versión **mayor** que la del equipo.
+
+Convención del id: flash total + FS + OTA, como en Arduino IDE — `1M64K512K` = 1 MB (FS 64 KB, OTA ~512 KB).
+
+Catálogo fijo en `src/lib/esp8266Layouts.js` (lista del panel `/upload-esp8266`).
+
+| Campo en release | Significado |
+|----------------|-------------|
+| `fs_ota_layout` | Id del layout (`1M64K512K`, `4M2M1M`, …) o `ANY` |
+| `flash_mb` | Derivado del layout (informativo / ESP32 legacy) |
+| `board` | Nota libre |
+
+Reglas:
+
+1. Misma versión más nueva → release con **`fs_ota_layout` coincidente**.
+2. Si no hay match, **no** se sirve otro layout (evita cruzar 1M64 con 4M2M).
+3. Excepción: release `fs_ota_layout: "ANY"` (universal, usar con cuidado).
+4. **Legacy `flash_mb`** (sin `fs_ota_layout`): si no hay bin del layout inferido, se usa release con el mismo `flash_mb` (p. ej. `1`) — útil mientras la flota no trae cabeceras nuevas. En el panel: *Legacy 1 MB (solo flash_mb)*. Prioridad: layout exacto → legacy flash → `ANY`.
+
+Cabecera `x-esp8266-action: check` → `200` JSON sin bajar el `.bin`.
+
+### ESP32
+
+Sigue `flash_mb` en el upload (sin layout FS/OTA en 8266).
+
+Metadatos en `data/releases.json`; binarios en `storage/bin/esp8266/` y `storage/bin/esp32/`.
 
 ## Requisitos en el servidor
 
@@ -79,6 +115,8 @@ curl -s http://192.168.17.159/health
 # OTA sin auth (debe responder JSON 304 o error controlado sin Basic):
 curl -s -o /dev/null -w "%{http_code}" -H "User-Agent: ESP8266-http-Update" \
   -H "x-esp8266-mode: sketch" -H "x-esp8266-version: 0_0_0" \
+  -H "x-esp8266-chip-size: 1048576" -H "x-esp8266-free-space: 489000" \
+  -H "x-esp8266-fs-partition-bytes: 65536" \
   http://192.168.17.159/update/esp8266
 ```
 

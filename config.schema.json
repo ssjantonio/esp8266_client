@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hq.instrumentation/schemas/uslvl/config.schema.json",
+  "title": "USLvlSensor configuration",
+  "description": "JSON persistido en LittleFS (/config.json). GET /config devuelve este objeto. POST /config acepta el mismo shape; firmware_version e identifier no se modifican en POST.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "firmware_version": {
+      "type": "integer",
+      "readOnly": true,
+      "description": "Versión numérica compilada en el sketch. Informacional en GET; el POST lo reemplaza por la del firmware."
+    },
+    "wifi_mode": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "0 = Access Point (aprovisionamiento, ~192.168.4.1). 1 = Station (red de planta)."
+    },
+    "host_name": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "Hostname WiFi y mDNS en modo Station. Editable."
+    },
+    "identifier": {
+      "type": "string",
+      "maxLength": 15,
+      "readOnly": true,
+      "description": "ID de fábrica (SSID en AP, mDNS TXT, Modbus). POST /config lo conserva. Nuevos: HQ_IOT_ + 6 hex chip."
+    },
+    "user_token": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "Reservado; no usado por el firmware actual."
+    },
+    "admin_token": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "Reservado; no usado por el firmware actual."
+    },
+    "ssid": {
+      "type": "string",
+      "maxLength": 31,
+      "description": "SSID de la red WiFi en modo Station."
+    },
+    "password": {
+      "type": "string",
+      "maxLength": 23,
+      "description": "Contraseña WiFi. Evitar loguear en la app."
+    },
+    "ip_type": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "0 = DHCP. 1 = IP estática (requiere ip_address, gateway, subnet, DNS)."
+    },
+    "ip_address": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "IPv4 estática del módulo."
+    },
+    "gateway": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "Puerta de enlace."
+    },
+    "subnet": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "Máscara de subred."
+    },
+    "primary_dns": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "DNS primario."
+    },
+    "secondary_dns": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "DNS secundario."
+    },
+    "server_host": {
+      "type": "string",
+      "maxLength": 31,
+      "description": "Host o IP del servidor TCP (relay transmisión 0x32)."
+    },
+    "server_port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "Puerto del servidor TCP."
+    },
+    "tcp_client_enabled": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "1 = cliente TCP activo hacia server_host:server_port."
+    },
+    "modbus_server_enabled": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "1 = servidor Modbus TCP (mapa holding 0x4851)."
+    },
+    "modbus_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 502,
+      "description": "Puerto Modbus TCP (típico 502)."
+    },
+    "sensor_type": {
+      "type": "integer",
+      "enum": [0, 1, 2],
+      "description": "0 = US A02YYUW (nivel, m). 1 = Rhino I-QY (peso). 2 = Dibatec Lumina (peso)."
+    },
+    "sensor_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "ID lógico en holding Modbus reg 4 y tramas TCP."
+    },
+    "group_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "Grupo en paquetes TCP (sensor.groupId)."
+    },
+    "uart_time_out": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120,
+      "description": "Segundos sin datos UART válidos antes de marcar error."
+    },
+    "avg_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "description": "US: muestras para promedio."
+    },
+    "filter_alpha": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 0.99,
+      "description": "US: paso bajo IIR; 0 desactiva filtro en boot si fuera de rango."
+    },
+    "umbral_error": {
+      "type": "number",
+      "minimum": 0,
+      "description": "US: umbral de salto de distancia (m) que invalida suavizado."
+    },
+    "d_value": {
+      "type": "number",
+      "minimum": 0,
+      "description": "US: umbral de suma de deltas (derivada)."
+    },
+    "t_value": {
+      "type": "number",
+      "minimum": 0,
+      "description": "US: ciclos para acumular deltas antes de comparar con d_value."
+    },
+    "m_value": {
+      "type": "number",
+      "description": "Calibración lineal pendiente (m); poco uso activo."
+    },
+    "b_value": {
+      "type": "number",
+      "description": "Calibración lineal ordenada (b); poco uso activo."
+    }
+  },
+  "required": [
+    "wifi_mode",
+    "host_name",
+    "identifier",
+    "ssid",
+    "sensor_type"
+  ]
+}

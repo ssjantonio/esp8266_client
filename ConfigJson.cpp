@@ -83,3 +83,20 @@ void setRestartCount(uint8_t count)
   EEPROM.put(0, count);
    EEPROM.commit();
 }
+
+static const int EEPROM_ADDR_WIFI_CYCLE = 1;
+
+uint8_t getWifiCyclePhase()
+{
+  uint8_t phase = WIFI_CYCLE_NORMAL;
+  EEPROM.get(EEPROM_ADDR_WIFI_CYCLE, phase);
+  return phase > WIFI_CYCLE_AP_RECOVERY ? WIFI_CYCLE_NORMAL : phase;
+}
+
+void setWifiCyclePhase(uint8_t phase)
+{
+  if (phase > WIFI_CYCLE_AP_RECOVERY)
+    phase = WIFI_CYCLE_NORMAL;
+  EEPROM.put(EEPROM_ADDR_WIFI_CYCLE, phase);
+  EEPROM.commit();
+}

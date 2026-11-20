@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hq.instrumentation/schemas/uslvl/ap-mode.request.schema.json",
+  "title": "USLvlSensor POST /ap-mode (request)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "password": {
+      "type": "string",
+      "const": "16794300",
+      "description": "Contraseña de fábrica; 403 si no coincide."
+    }
+  },
+  "required": ["password"]
+}

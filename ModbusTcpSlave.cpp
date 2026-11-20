@@ -11,6 +11,8 @@ void ModbusTcpSlave::begin(uint16_t port)
   _holding[5] = MODBUS_MAP_SIGNATURE;
   _holding[6] = MODBUS_MAP_VERSION;
   _activeClients = 0;
+  _clients[0] = nullptr;
+  _clients[1] = nullptr;
 
   _server = new AsyncServer(port);
   _server->onClient(&ModbusTcpSlave::onNewClient, this);
@@ -18,10 +20,41 @@ void ModbusTcpSlave::begin(uint16_t port)
   _running = true;
 }
 
+void ModbusTcpSlave::forgetClient(AsyncClient *client)
+{
+  if (!client)
+    return;
+  for (uint8_t i = 0; i < 2; i++)
+  {
+    if (_clients[i] == client)
+    {
+      _clients[i] = nullptr;
+      if (_activeClients > 0)
+        _activeClients--;
+      break;
+    }
+  }
+}
+
 void ModbusTcpSlave::end()
 {
   if (!_running)
     return;
+
+  AsyncClient *pending[2];
+  for (uint8_t i = 0; i < 2; i++)
+  {
+    pending[i] = _clients[i];
+    _clients[i] = nullptr;
+  }
+  _activeClients = 0;
+
+  for (uint8_t i = 0; i < 2; i++)
+  {
+    if (pending[i])
+      pending[i]->close(true);
+  }
+
   if (_server)
   {
     _server->end();
@@ -29,7 +62,6 @@ void ModbusTcpSlave::end()
     _server = nullptr;
   }
   _running = false;
-  _activeClients = 0;
 }
 
 void ModbusTcpSlave::setHolding(uint16_t addr, uint16_t value)
@@ -72,14 +104,33 @@ void ModbusTcpSlave::onNewClient(void *arg, AsyncClient *client)
   if (!self || !client)
     return;
 
-  // Limitar conexiones para no agotar heap del ESP8266.
+  // Rechazar sin contarla: close() dispara onDisconnect y, si se descontara,
+  // el cupo bajaría solo y se acumularían clientes (fuga de heap).
   if (self->_activeClients >= 2)
   {
+    client->onDisconnect([](void *, AsyncClient *c) { delete c; }, nullptr);
     client->close(true);
     return;
   }
 
-  self->_activeClients++;
+  bool tracked = false;
+  for (uint8_t i = 0; i < 2; i++)
+  {
+    if (!self->_clients[i])
+    {
+      self->_clients[i] = client;
+      self->_activeClients++;
+      tracked = true;
+      break;
+    }
+  }
+  if (!tracked)
+  {
+    client->onDisconnect([](void *, AsyncClient *c) { delete c; }, nullptr);
+    client->close(true);
+    return;
+  }
+
   client->setNoDelay(true);
   client->onData(&ModbusTcpSlave::onClientData, self);
   client->onDisconnect(&ModbusTcpSlave::onClientDisconnect, self);
@@ -88,10 +139,10 @@ void ModbusTcpSlave::onNewClient(void *arg, AsyncClient *client)
 
 void ModbusTcpSlave::onClientDisconnect(void *arg, AsyncClient *client)
 {
-  (void)client;
   ModbusTcpSlave *self = reinterpret_cast<ModbusTcpSlave *>(arg);
-  if (self && self->_activeClients > 0)
-    self->_activeClients--;
+  if (self)
+    self->forgetClient(client);
+  delete client;
 }
 
 void ModbusTcpSlave::onClientError(void *arg, AsyncClient *client, int8_t error)
@@ -153,6 +204,10 @@ void ModbusTcpSlave::handleRequest(AsyncClient *client, const uint8_t *data, siz
     size_t frameLen = 6 + pduLen;
     if (len - offset < frameLen)
       break;
+
+    // Cualquier trama completa cuenta como vida del canal, aunque sea excepción.
+    _servedRequest = true;
+    _lastRequestMs = millis();
 
     if (function != 0x03)
     {

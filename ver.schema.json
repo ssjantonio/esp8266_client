@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hq.instrumentation/schemas/uslvl/ver.schema.json",
+  "title": "USLvlSensor GET /ver",
+  "description": "Respuesta de GET http://<device>/ver para descubrimiento (AP 192.168.4.1 o LAN).",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "family": {
+      "type": "string",
+      "const": "Esp",
+      "description": "Familia HQ; filtrar dispositivos propios."
+    },
+    "identifier": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "ID de fábrica (HQ_IOT_…); coincide con SSID en modo AP."
+    },
+    "host_name": {
+      "type": "string",
+      "maxLength": 15,
+      "description": "Hostname configurable (mDNS en STA)."
+    },
+    "version": {
+      "type": "string",
+      "description": "Versión build legible (TRUC_VERSION, p. ej. 1_1_0)."
+    },
+    "firmware_version": {
+      "type": "integer",
+      "description": "Build interno (entero ascendente; Modbus reg 3). Distinto de version/TRUC_VERSION (semver OTA)."
+    },
+    "spiffs_version": {
+      "type": "integer",
+      "description": "Versión de sistema de archivos / assets LittleFS si aplica."
+    },
+    "wifi_mode": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "0 = AP, 1 = Station."
+    },
+    "free_heap": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Heap libre (bytes)."
+    },
+    "free_sketch": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Espacio libre en partición OTA/sketch (bytes)."
+    },
+    "flash_real_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tamaño real del chip flash (bytes)."
+    },
+    "fs_partition_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tamaño partición FS del build (FS_PHYS_SIZE)."
+    },
+    "fs_ota_layout": {
+      "type": "string",
+      "pattern": "^[0-9]+M[0-9]*(K|M)[0-9]*(K|M)$",
+      "description": "Id de layout flash/FS/OTA (catálogo OTA, p. ej. 1M64K512K, 4M2M1M)."
+    }
+  },
+  "required": ["family", "identifier", "version", "firmware_version"]
+}
