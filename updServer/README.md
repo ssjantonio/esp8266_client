@@ -41,7 +41,9 @@ Reglas:
 3. Excepción: release `fs_ota_layout: "ANY"` (universal, usar con cuidado).
 4. **Legacy `flash_mb`** (sin `fs_ota_layout`): si no hay bin del layout inferido, se usa release con el mismo `flash_mb` (p. ej. `1`) — útil mientras la flota no trae cabeceras nuevas. En el panel: *Legacy 1 MB (solo flash_mb)*. Prioridad: layout exacto → legacy flash → `ANY`.
 
-Cabecera `x-esp8266-action: check` → `200` JSON sin bajar el `.bin`.
+Cabecera `x-esp8266-action: check` → `200` JSON sin bajar el `.bin` (incluye `release_name`, `release_layout`, `match`, `binary_bytes`, `binary_file`, etc.).
+
+En la **descarga** del `.bin` el servidor envía cabeceras `X-HQ-Release-*` (el firmware actúa sobre el JSON del `check` y log de progreso).
 
 ### ESP32
 

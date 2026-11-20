@@ -8,6 +8,7 @@ const {
   isSketchMode,
   SKETCH_MODES,
 } = require('../lib/otaClient');
+const { releaseMatchKind, releaseLayoutLabel } = require('../lib/releaseMatch');
 
 function createUpdateRouter({ dataDir, appRoot, log, platform }) {
   const router = express.Router();
@@ -73,23 +74,38 @@ function createUpdateRouter({ dataDir, appRoot, log, platform }) {
         return res.status(304).json({ result: 'No updates', data: '' });
       }
 
+      const match = releaseMatchKind(release, ota);
+      const releaseLayout = releaseLayoutLabel(release);
+      const binStat = fs.statSync(resolved);
+
+      const releaseMeta = {
+        version: release.version,
+        release_id: release.id,
+        release_name: release.name,
+        fs_ota_layout: release.fs_ota_layout || null,
+        release_layout: releaseLayout,
+        flash_mb: release.flash_mb || null,
+        binary_bytes: binStat.size,
+        binary_file: path.basename(resolved),
+        match,
+        client_fs_ota_layout: ota.fsOtaLayout || null,
+        platform: detected.platform,
+      };
+
       if (ota.action === 'check') {
         log(
           'Update available:',
           req.ip,
           release.version,
-          'layout',
-          release.fs_ota_layout || 'any',
-          'flash',
-          release.flash_mb || 'any'
+          releaseLayout,
+          'match',
+          match,
+          binStat.size,
+          'bytes'
         );
         return res.status(200).json({
           result: 'update',
-          version: release.version,
-          fs_ota_layout: release.fs_ota_layout || null,
-          flash_mb: release.flash_mb || null,
-          platform: detected.platform,
-          client_fs_ota_layout: ota.fsOtaLayout || null,
+          ...releaseMeta,
         });
       }
 
@@ -97,13 +113,25 @@ function createUpdateRouter({ dataDir, appRoot, log, platform }) {
         'Download',
         detected.platform,
         release.version,
-        'layout',
-        release.fs_ota_layout || 'any',
-        'client_layout',
+        releaseLayout,
+        'match',
+        match,
+        binStat.size,
+        'bytes',
+        'client',
         ota.fsOtaLayout,
         req.ip
       );
-      return res.download(resolved);
+
+      res.setHeader('X-HQ-Release-Version', release.version);
+      res.setHeader('X-HQ-Release-Id', String(release.id));
+      res.setHeader('X-HQ-Release-Name', release.name || '');
+      res.setHeader('X-HQ-Release-Layout', releaseLayout);
+      res.setHeader('X-HQ-Release-Match', match);
+      res.setHeader('X-HQ-Client-Layout', ota.fsOtaLayout || '');
+      res.setHeader('X-HQ-Binary-Bytes', String(binStat.size));
+
+      return res.download(resolved, path.basename(resolved));
     } catch (err) {
       log('update error', err);
       return res.status(304).json({ result: 'No updates', data: '' });

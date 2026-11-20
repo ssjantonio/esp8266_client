@@ -55,6 +55,7 @@ bool _sendTCPData = false;
 unsigned long _lastTCPAlive = 0;
 bool _enable_update = false;
 t_httpUpdate_return _last_update_result = HTTP_UPDATE_OK;
+OtaReleaseInfo g_otaReleaseInfo;
 
 Config config;  //archivo de configuración
 const char *config_filename = "/config.json"; //archivo de configuración
@@ -1333,12 +1334,13 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
 
   server.on("/update", [](AsyncWebServerRequest *request)
   {
-    if(_last_update_result != HTTP_UPDATE_OK)
+    if (_last_update_result != HTTP_UPDATE_OK)
     {
       JsonDocument doc;
       doc["result"] = "HTTP_UPDATE_FAILED";
       doc["error"] = ESPhttpUpdate.getLastError();
       doc["error_string"] = ESPhttpUpdate.getLastErrorString();
+      appendOtaReleaseInfo(doc);
       _last_update_result = HTTP_UPDATE_OK;
       String jsonString;
       serializeJson(doc, jsonString);
@@ -1347,7 +1349,13 @@ server.on("/set-config", HTTP_GET, [](AsyncWebServerRequest* request) {
     else
     {
       _enable_update = true;
-      request->send(200, "application/json", F("{\"result\":\"OK updating...\"}"));
+      JsonDocument doc;
+      doc["result"] = "OK";
+      doc["message"] = "updating";
+      appendOtaReleaseInfo(doc);
+      String jsonString;
+      serializeJson(doc, jsonString);
+      request->send(200, "application/json", jsonString);
     }
   });
 #ifndef ASYNC_WEBSERVER
@@ -1420,6 +1428,7 @@ void startModbus()
 
 void pauseNetForUpdate()
 {
+  WiFi.setSleep(false);
   // Solo pausar Modbus + cliente TCP. NO hacer server.end():
   // en ESP8266 AsyncWebServer end()+begin() a menudo deja el puerto 80
   // muerto (ERR_CONNECTION_REFUSED) mientras Modbus sigue vivo porque
@@ -1814,7 +1823,8 @@ void loop(void)
     _enable_update = false;
     _didFirstOtaCheck = true;
     _last_updated = millis();
-    Logf("OTA check %s -> %s\n", TRUC_VERSION, updateUrl);
+    Logf("OTA check local=%s url=%s client_layout=%s\n", TRUC_VERSION,
+         updateUrl, currentOtaFsLayoutId() ? currentOtaFsLayoutId() : "?");
     int probe = probeSketchUpdate();
     if (probe == 200)
     {
@@ -1827,7 +1837,9 @@ void loop(void)
         ESP.reset();
       }
       else
-        Logf("OTA fallo %d\n", (int)_last_update_result);
+        Logf("OTA fallo %d err=%d %s\n", (int)_last_update_result,
+             ESPhttpUpdate.getLastError(),
+             ESPhttpUpdate.getLastErrorString().c_str());
       resumeNetAfterUpdate();
     }
     else
